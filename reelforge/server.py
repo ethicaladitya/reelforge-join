@@ -247,8 +247,14 @@ UI_HTML = r"""<!DOCTYPE html>
   }
   header .logo span { color: var(--accent); }
   header .tagline { font-size: 13px; color: var(--muted); margin-left: 4px; }
+  header nav { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  header nav a {
+    font-size: 13px; font-weight: 600; color: var(--muted);
+    text-decoration: none; padding: 6px 14px; border-radius: 8px;
+    border: 1px solid var(--border); transition: all 0.15s;
+  }
+  header nav a:hover { color: var(--accent); border-color: var(--accent); }
   header .badge {
-    margin-left: auto;
     font-size: 11px;
     background: var(--accent);
     color: #000;
@@ -475,6 +481,10 @@ UI_HTML = r"""<!DOCTYPE html>
 <header>
   <div class="logo">Reel<span>Forge</span></div>
   <div class="tagline">AI clips → polished vertical reels</div>
+  <nav>
+    <a href="/" style="color:var(--accent);border-color:var(--accent);">Render</a>
+    <a href="/library">Library</a>
+  </nav>
   <div class="badge">v0.1.0</div>
 </header>
 
@@ -596,6 +606,7 @@ UI_HTML = r"""<!DOCTYPE html>
       <video id="output-video" controls playsinline></video>
       <div class="output-actions">
         <a id="download-btn" class="btn-secondary" download="final_reel.mp4">⬇ Download</a>
+        <a href="/library" class="btn-secondary">📚 Library</a>
         <button class="btn-secondary" onclick="resetUI()">🔄 New Reel</button>
       </div>
     </div>
@@ -623,6 +634,7 @@ let clips = [];       // {file, name, size, uploadedName}
 let musicFile = null;
 let currentJobId = null;
 let ws = null;
+let sessionId = crypto.randomUUID(); // fresh session per page load
 
 // ─────────────────────────────────────────────
 // Drop zone
@@ -760,10 +772,17 @@ async function startRender() {
 
     // 4. Submit job
     btn.textContent = '⏳ Starting render…';
+    const label = clips.map(c => c.name.replace(/\.\w+$/, '')).join(' · ').slice(0, 60);
     const resp = await fetch('/api/render', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clips: orderedNames, music: musicName, config })
+      body: JSON.stringify({
+        clips: orderedNames,
+        session_id: sessionId,
+        music: musicName,
+        config,
+        label,
+      })
     });
     const job = await resp.json();
     if (!resp.ok) throw new Error(job.detail || 'Failed to start job');
@@ -783,20 +802,20 @@ async function startRender() {
 }
 
 async function uploadClips() {
-  // Upload in sorted order; return list of server-side filenames in order
+  // New session for each render so clips never bleed across jobs
+  sessionId = crypto.randomUUID();
   const names = [];
   for (let i = 0; i < clips.length; i++) {
     const c = clips[i];
     setProgress(Math.round((i / clips.length) * 10), `Uploading ${c.name}…`);
 
     const fd = new FormData();
-    // Prefix with index to preserve order server-side
-    const prefixed = String(i+1).padStart(3,'0') + '_' + c.name;
-    fd.append('file', c.file, prefixed);
+    fd.append('file', c.file, c.name);        // keep original name
+    fd.append('session_id', sessionId);        // scoped to this render
     const r = await fetch('/api/upload/clip', { method: 'POST', body: fd });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail);
-    names.push(d.filename);
+    names.push(d.filename);                    // names in user-specified order
   }
   return names;
 }
@@ -804,6 +823,7 @@ async function uploadClips() {
 async function uploadMusic() {
   const fd = new FormData();
   fd.append('file', musicFile, musicFile.name);
+  fd.append('session_id', sessionId);
   const r = await fetch('/api/upload/music', { method: 'POST', body: fd });
   const d = await r.json();
   if (!r.ok) throw new Error(d.detail);
@@ -997,11 +1017,15 @@ async def index() -> HTMLResponse:
 
 
 @app.post("/api/upload/clip")
-async def upload_clip(file: UploadFile = File(...)) -> dict[str, str]:
-    session_dir = UPLOADS_DIR / "clips"
+async def upload_clip(
+    file: UploadFile = File(...),
+    session_id: str = "",
+) -> dict[str, str]:
+    """Upload a clip into a session-scoped directory to preserve order."""
+    sid = session_id or "default"
+    session_dir = UPLOADS_DIR / sid / "clips"
     session_dir.mkdir(parents=True, exist_ok=True)
 
-    # Sanitize filename
     safe_name = Path(file.filename or "clip.mp4").name
     dest = session_dir / safe_name
 
@@ -1009,12 +1033,16 @@ async def upload_clip(file: UploadFile = File(...)) -> dict[str, str]:
         while chunk := await file.read(1024 * 1024):
             await f.write(chunk)
 
-    return {"filename": safe_name}
+    return {"filename": safe_name, "session_id": sid}
 
 
 @app.post("/api/upload/music")
-async def upload_music(file: UploadFile = File(...)) -> dict[str, str]:
-    music_dir = UPLOADS_DIR / "music"
+async def upload_music(
+    file: UploadFile = File(...),
+    session_id: str = "",
+) -> dict[str, str]:
+    sid = session_id or "default"
+    music_dir = UPLOADS_DIR / sid / "music"
     music_dir.mkdir(parents=True, exist_ok=True)
 
     safe_name = Path(file.filename or "music.mp3").name
@@ -1032,38 +1060,62 @@ async def upload_music(file: UploadFile = File(...)) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-class RenderRequest:
-    def __init__(self, clips: list[str], music: str | None, config: dict[str, Any]) -> None:
-        self.clips = clips
-        self.music = music
-        self.config = config
-
-
 from pydantic import BaseModel
 
 
 class RenderPayload(BaseModel):
-    clips: list[str]
+    clips: list[str]        # ordered list of filenames as uploaded
+    session_id: str = "default"
     music: str | None = None
     config: dict[str, Any] = {}
+    label: str = ""         # optional human label shown in library
 
 
 @app.post("/api/render")
 async def start_render(payload: RenderPayload) -> dict[str, str]:
-    clips_dir = UPLOADS_DIR / "clips"
-    if not clips_dir.exists() or not list(clips_dir.iterdir()):
-        raise HTTPException(status_code=400, detail="No clips uploaded")
+    sid = payload.session_id or "default"
+    clips_dir = UPLOADS_DIR / sid / "clips"
+
+    if not clips_dir.exists():
+        raise HTTPException(status_code=400, detail="No clips uploaded for this session")
+
+    # Build ordered clip paths exactly as the client specified
+    ordered_clips = []
+    for name in payload.clips:
+        p = clips_dir / name
+        if p.exists():
+            ordered_clips.append(p)
+
+    if not ordered_clips:
+        raise HTTPException(status_code=400, detail="None of the specified clips were found")
 
     jid = _new_job()
+
+    # Store label + clip names for library display
+    _update_job(
+        jid,
+        label=payload.label or f"Reel {jid[:6]}",
+        clip_names=[p.name for p in ordered_clips],
+    )
+
     output_path = OUTPUTS_DIR / f"reel_{jid[:8]}.mp4"
 
     music_path: Path | None = None
     if payload.music:
-        music_path = UPLOADS_DIR / "music" / payload.music
+        music_path = UPLOADS_DIR / sid / "music" / payload.music
+
+    # Pass ordered clips via a symlinked staging dir so pipeline sorts correctly
+    staging_dir = UPLOADS_DIR / sid / f"stage_{jid[:8]}"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    for i, src in enumerate(ordered_clips):
+        dst = staging_dir / f"{i+1:03d}_{src.name}"
+        if not dst.exists():
+            import shutil as _sh
+            _sh.copy2(src, dst)
 
     thread = threading.Thread(
         target=_run_pipeline_thread,
-        args=(jid, clips_dir, output_path, payload.config, music_path, BASE_DIR),
+        args=(jid, staging_dir, output_path, payload.config, music_path, BASE_DIR),
         daemon=True,
     )
     thread.start()
@@ -1132,3 +1184,265 @@ async def serve_output(filename: str) -> FileResponse:
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Output not found")
     return FileResponse(path, media_type="video/mp4", filename=filename)
+
+
+# ---------------------------------------------------------------------------
+# Library — list all completed reels on disk
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/library")
+async def list_library() -> list[dict[str, Any]]:
+    """Return metadata for every completed reel in the output directory."""
+    import time as _time
+
+    reels = []
+    for p in sorted(OUTPUTS_DIR.glob("reel_*.mp4"), key=lambda f: f.stat().st_mtime, reverse=True):
+        stat = p.stat()
+        # Try to match to an in-memory job for extra metadata
+        job_meta: dict[str, Any] = {}
+        short = p.stem.replace("reel_", "")
+        with _job_lock:
+            for jid, job in _jobs.items():
+                if jid[:8] == short:
+                    job_meta = job
+                    break
+
+        reels.append({
+            "filename": p.name,
+            "size_mb": round(stat.st_size / 1024 / 1024, 1),
+            "created_at": stat.st_mtime,
+            "label": job_meta.get("label", p.stem),
+            "clip_names": job_meta.get("clip_names", []),
+            "duration_s": job_meta.get("total_duration"),
+        })
+    return reels
+
+
+@app.get("/library", response_class=HTMLResponse)
+async def library_page() -> HTMLResponse:
+    return HTMLResponse(LIBRARY_HTML)
+
+
+# ---------------------------------------------------------------------------
+# Library HTML
+# ---------------------------------------------------------------------------
+
+LIBRARY_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>ReelForge — Library</title>
+<style>
+  :root {
+    --bg: #0f0f13; --surface: #1a1a23; --surface2: #23232f;
+    --accent: #FFD400; --text: #f0f0f5; --muted: #7a7a90;
+    --border: #2e2e3e; --success: #4ade80; --error: #f87171;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 18px 32px; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  header .logo { font-size: 22px; font-weight: 800; }
+  header .logo span { color: var(--accent); }
+  header nav { margin-left: auto; display: flex; gap: 8px; }
+  header nav a {
+    font-size: 13px; font-weight: 600; color: var(--muted);
+    text-decoration: none; padding: 6px 14px; border-radius: 8px;
+    border: 1px solid var(--border); transition: all 0.15s;
+  }
+  header nav a:hover, header nav a.active { color: var(--accent); border-color: var(--accent); }
+
+  .page { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
+  .page-title { font-size: 24px; font-weight: 800; margin-bottom: 6px; }
+  .page-sub { font-size: 14px; color: var(--muted); margin-bottom: 28px; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 20px;
+  }
+
+  .reel-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+    transition: border-color 0.15s, transform 0.15s;
+  }
+  .reel-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+
+  .reel-thumb {
+    width: 100%; aspect-ratio: 9/16; background: #000;
+    display: flex; align-items: center; justify-content: center;
+    position: relative; overflow: hidden; cursor: pointer;
+  }
+  .reel-thumb video { width: 100%; height: 100%; object-fit: cover; }
+  .reel-thumb .play-btn {
+    position: absolute; inset: 0; display: flex;
+    align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.35); transition: opacity 0.15s;
+  }
+  .reel-thumb:hover .play-btn { opacity: 0; }
+  .play-icon {
+    width: 48px; height: 48px; border-radius: 50%;
+    background: rgba(255,212,0,0.9);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; color: #000;
+  }
+
+  .reel-info { padding: 14px; }
+  .reel-label { font-size: 14px; font-weight: 700; margin-bottom: 4px;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .reel-meta { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .reel-clips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
+  .clip-pill {
+    font-size: 10px; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 2px 6px; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px;
+  }
+
+  .reel-actions { display: flex; gap: 8px; }
+  .btn { flex: 1; padding: 8px; border-radius: 8px; border: 1px solid var(--border);
+         background: var(--surface2); color: var(--text); font-size: 12px;
+         font-weight: 600; cursor: pointer; text-align: center; text-decoration: none;
+         transition: all 0.15s; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-primary { background: var(--accent); color: #000; border-color: var(--accent); }
+  .btn-primary:hover { background: #ffe033; color: #000; }
+
+  .empty {
+    grid-column: 1/-1; text-align: center; padding: 80px 0;
+    color: var(--muted); font-size: 15px;
+  }
+  .empty a { color: var(--accent); text-decoration: none; font-weight: 600; }
+
+  .badge {
+    display: inline-block; font-size: 10px; font-weight: 700;
+    padding: 2px 7px; border-radius: 999px; margin-left: 6px;
+    background: var(--accent); color: #000; vertical-align: middle;
+  }
+
+  /* Modal */
+  .modal-bg {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.85); z-index: 100;
+    align-items: center; justify-content: center;
+  }
+  .modal-bg.open { display: flex; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px;
+    max-width: 420px; width: 90%;
+  }
+  .modal video { width: 100%; border-radius: 8px; max-height: 70vh; }
+  .modal-title { font-size: 15px; font-weight: 700; margin-bottom: 10px; }
+  .modal-close {
+    float: right; background: none; border: none; color: var(--muted);
+    font-size: 20px; cursor: pointer; line-height: 1;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Reel<span>Forge</span></div>
+  <nav>
+    <a href="/">Render</a>
+    <a href="/library" class="active">Library</a>
+  </nav>
+</header>
+
+<div class="page">
+  <div class="page-title">Library <span class="badge" id="count">0</span></div>
+  <div class="page-sub">All your rendered reels — click to preview, download, or share.</div>
+
+  <div class="grid" id="grid">
+    <div class="empty">Loading…</div>
+  </div>
+</div>
+
+<!-- Modal player -->
+<div class="modal-bg" id="modal" onclick="closeModal(event)">
+  <div class="modal">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div class="modal-title" id="modal-title">Preview</div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <video id="modal-video" controls playsinline></video>
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <a id="modal-dl" class="btn btn-primary" download>⬇ Download</a>
+      <button class="btn" onclick="closeModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+async function loadLibrary() {
+  const r = await fetch('/api/library');
+  const reels = await r.json();
+  const grid = document.getElementById('grid');
+  document.getElementById('count').textContent = reels.length;
+
+  if (reels.length === 0) {
+    grid.innerHTML = '<div class="empty">No reels yet. <a href="/">Render your first one →</a></div>';
+    return;
+  }
+
+  grid.innerHTML = reels.map(reel => {
+    const date = new Date(reel.created_at * 1000).toLocaleDateString(undefined, {
+      month: 'short', day: 'numeric', year: 'numeric'
+    });
+    const clipPills = (reel.clip_names || []).map(n =>
+      `<span class="clip-pill" title="${n}">${n.replace(/^\d+_/,'').replace(/\.mp4$/i,'')}</span>`
+    ).join('');
+
+    return `
+    <div class="reel-card">
+      <div class="reel-thumb" onclick="openModal('${reel.filename}','${reel.label}')">
+        <video src="/api/output/${reel.filename}" muted preload="metadata"
+               onmouseenter="this.play()" onmouseleave="this.pause();this.currentTime=0"></video>
+        <div class="play-btn"><div class="play-icon">▶</div></div>
+      </div>
+      <div class="reel-info">
+        <div class="reel-label">${reel.label}</div>
+        <div class="reel-meta">${reel.size_mb} MB · ${date}</div>
+        ${clipPills ? `<div class="reel-clips">${clipPills}</div>` : ''}
+        <div class="reel-actions">
+          <a class="btn btn-primary" href="/api/output/${reel.filename}" download="${reel.filename}">⬇ Download</a>
+          <button class="btn" onclick="openModal('${reel.filename}','${reel.label}')">▶ Preview</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openModal(filename, label) {
+  const v = document.getElementById('modal-video');
+  const dl = document.getElementById('modal-dl');
+  document.getElementById('modal-title').textContent = label;
+  v.src = `/api/output/${filename}`;
+  dl.href = `/api/output/${filename}`;
+  dl.download = filename;
+  document.getElementById('modal').classList.add('open');
+  v.play();
+}
+
+function closeModal(e) {
+  if (e && e.target !== document.getElementById('modal')) return;
+  const v = document.getElementById('modal-video');
+  v.pause();
+  v.src = '';
+  document.getElementById('modal').classList.remove('open');
+}
+
+loadLibrary();
+</script>
+</body>
+</html>
+"""
