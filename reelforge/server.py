@@ -1215,6 +1215,18 @@ async def serve_output(filename: str) -> FileResponse:
     return FileResponse(path, media_type="video/mp4", filename=filename)
 
 
+@app.delete("/api/output/{filename}")
+async def delete_output(filename: str) -> dict[str, str]:
+    # Safety: only allow deleting reel_*.mp4 files in the output dir
+    if not filename.startswith("reel_") or not filename.endswith(".mp4"):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    path = OUTPUTS_DIR / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    path.unlink()
+    return {"deleted": filename}
+
+
 # ---------------------------------------------------------------------------
 # Library — list all completed reels on disk
 # ---------------------------------------------------------------------------
@@ -1344,6 +1356,8 @@ LIBRARY_HTML = r"""<!DOCTYPE html>
   .btn:hover { border-color: var(--accent); color: var(--accent); }
   .btn-primary { background: var(--accent); color: #000; border-color: var(--accent); }
   .btn-primary:hover { background: #ffe033; color: #000; }
+  .btn-danger { color: var(--error); border-color: transparent; background: none; flex: 0; padding: 8px 10px; }
+  .btn-danger:hover { background: rgba(248,113,113,0.1); border-color: var(--error); color: var(--error); }
 
   .empty {
     grid-column: 1/-1; text-align: center; padding: 80px 0;
@@ -1445,6 +1459,7 @@ async function loadLibrary() {
         <div class="reel-actions">
           <a class="btn btn-primary" href="/api/output/${reel.filename}" download="${reel.filename}">⬇ Download</a>
           <button class="btn" onclick="openModal('${reel.filename}','${reel.label}')">▶ Preview</button>
+          <button class="btn btn-danger" onclick="deleteReel('${reel.filename}', this)" title="Delete">🗑</button>
         </div>
       </div>
     </div>`;
@@ -1468,6 +1483,29 @@ function closeModal(e) {
   v.pause();
   v.src = '';
   document.getElementById('modal').classList.remove('open');
+}
+
+async function deleteReel(filename, btn) {
+  if (!confirm(`Delete ${filename}?\nThis cannot be undone.`)) return;
+  btn.disabled = true;
+  btn.textContent = '…';
+  const r = await fetch(`/api/output/${filename}`, { method: 'DELETE' });
+  if (r.ok) {
+    btn.closest('.reel-card').style.transition = 'opacity 0.3s';
+    btn.closest('.reel-card').style.opacity = '0';
+    setTimeout(() => { btn.closest('.reel-card').remove(); updateCount(); }, 300);
+  } else {
+    btn.textContent = '🗑';
+    btn.disabled = false;
+    alert('Delete failed');
+  }
+}
+
+function updateCount() {
+  const n = document.querySelectorAll('.reel-card').length;
+  document.getElementById('count').textContent = n;
+  if (n === 0) document.getElementById('grid').innerHTML =
+    '<div class="empty">No reels yet. <a href="/">Render your first one →</a></div>';
 }
 
 loadLibrary();
