@@ -1,0 +1,59 @@
+[project]
+name = "reelforge"
+version = "0.1.0"
+description = "Automatically convert AI-generated talking-head clips into polished Instagram Reels, TikTok, and YouTube Shorts"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [{ name = "ReelForge" }]
+
+dependencies = [
+    "faster-whisper>=1.0.3",
+    "rich>=13.7.1",
+    "pyyaml>=6.0.1",
+    "click>=8.1.7",
+    "numpy>=1.26.4",
+    "Pillow>=10.3.0",
+    "pydantic>=2.7.1",
+    "pydantic-settings>=2.3.0",
+    "fastapi>=0.138.1",
+    "uvicorn[standard]>=0.49.0",
+    "python-multipart>=0.0.32",
+    "aiofiles>=25.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.4.4",
+    "mypy>=1.10.0",
+    "types-PyYAML>=6.0.12",
+]
+
+[project.scripts]
+reelforge = "reelforge.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["reelforge"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=reelforge --cov-report=term-missing"

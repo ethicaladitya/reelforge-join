@@ -1,0 +1,106 @@
+brand:
+  handle: "@ethicaladitya"
+  end_card:
+    enabled: true
+    text: "Follow for practical WordPress tips."
+    duration: 2.5
+    font_size: 54
+
+captions:
+  enabled: true
+  model: "base"          # tiny | base | small | medium | large-v3
+  language: "en"
+  font:
+    family: "Montserrat-Bold"
+    size: 68
+    color: "#FFFFFF"
+    stroke_color: "#000000"
+    stroke_width: 4
+  position: 0.78         # 0.0 = top, 1.0 = bottom (as fraction of height)
+  max_chars_per_line: 22
+  words_per_block: 4     # words shown simultaneously
+  highlight:
+    enabled: true
+    color: "#FFD400"
+    keywords:
+      - WordPress
+      - Backup
+      - Restore
+      - Hack
+      - Malware
+      - Hosting
+      - Security
+      - Plugin
+      - Speed
+      - Offline
+      - Server
+      - SSL
+      - Database
+      - DNS
+      - Domain
+      - website
+      - disappear
+
+music:
+  enabled: false
+  path: null
+  volume: 0.05
+  duck_volume: 0.02       # volume during speech
+  fade_in: 1.0
+  fade_out: 2.0
+
+zoom:
+  enabled: true
+  scale: 1.05
+  interval: 4.0           # seconds between zoom pulses
+  duration: 2.0           # seconds per zoom
+
+transitions:
+  type: "fade"            # none | fade | dissolve | dip_to_black
+  duration: 0.25
+
+silence:
+  trim_enabled: true
+  threshold_db: -40       # dB level considered silence
+  min_silence_ms: 300     # minimum silence duration to trim
+  pad_ms: 80              # silence to leave at clip edges
+
+watermark:
+  enabled: true
+  path: "assets/watermarks/watermark.png"
+  position: "bottom_left" # bottom_left | bottom_right | top_left | top_right
+  opacity: 0.6
+  margin: 40              # pixels from edge
+
+logo:
+  enabled: false
+  path: "assets/logos/logo.png"
+  position: "top_right"
+  scale: 0.08
+  opacity: 0.9
+  margin: 30
+
+output:
+  width: 1080
+  height: 1920
+  fps: 30
+  codec: "libx264"
+  crf: 18                 # 0–51; lower = better quality
+  preset: "slow"          # ultrafast | fast | medium | slow | veryslow
+  pixel_format: "yuv420p"
+  audio_codec: "aac"
+  audio_bitrate: "192k"
+
+audio:
+  loudness_target: -14.0  # LUFS (EBU R128 / streaming standard)
+  true_peak: -1.0
+  lra: 11.0
+
+clips:
+  directory: "clips"
+  sort: "alphabetical"    # alphabetical | numeric | natural
+  extensions:
+    - ".mp4"
+    - ".mov"
+    - ".webm"
+    - ".mkv"

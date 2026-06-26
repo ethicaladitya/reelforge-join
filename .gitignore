@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+dist/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+
+# ReelForge runtime
+output/
+*.mp4
+*.mov
+*.webm
+*.mkv
+*.ass
+
+# Whisper model cache
+~/.cache/huggingface/
+~/.cache/whisper/
+
+# macOS
+.DS_Store
