@@ -15,8 +15,11 @@ from pathlib import Path
 from typing import Any
 
 import aiofiles
+import os
+
+import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import load_config
@@ -185,6 +188,19 @@ def _run_pipeline_thread(
 BASE_DIR = Path(__file__).parent.parent
 UPLOADS_DIR = BASE_DIR / "output" / "_uploads"
 OUTPUTS_DIR = BASE_DIR / "output"
+SETTINGS_FILE = BASE_DIR / "output" / "_settings.json"
+YT_TOKEN_FILE = BASE_DIR / "output" / "_yt_token.json"
+YT_CREDS_FILE = BASE_DIR / "output" / "_yt_credentials.json"
+
+
+def _load_settings() -> dict[str, Any]:
+    if SETTINGS_FILE.exists():
+        return json.loads(SETTINGS_FILE.read_text())
+    return {}
+
+
+def _save_settings(data: dict[str, Any]) -> None:
+    SETTINGS_FILE.write_text(json.dumps(data, indent=2))
 
 
 @asynccontextmanager
@@ -484,6 +500,7 @@ UI_HTML = r"""<!DOCTYPE html>
   <nav>
     <a href="/" style="color:var(--accent);border-color:var(--accent);">Render</a>
     <a href="/library">Library</a>
+    <a href="/settings">Settings</a>
   </nav>
   <div class="badge">v0.1.0</div>
 </header>
@@ -1274,6 +1291,457 @@ async def delete_output(filename: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Settings API
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/settings")
+async def get_settings() -> dict[str, Any]:
+    s = _load_settings()
+    return {
+        "ig_user_id": s.get("ig_user_id", ""),
+        "ig_access_token": "***" if s.get("ig_access_token") else "",
+        "public_base_url": s.get("public_base_url", ""),
+        "yt_credentials_uploaded": YT_CREDS_FILE.exists(),
+        "yt_authorized": YT_TOKEN_FILE.exists(),
+    }
+
+
+@app.post("/api/settings")
+async def save_settings(request: Request) -> dict[str, str]:
+    body = await request.json()
+    s = _load_settings()
+    if body.get("ig_user_id") is not None:
+        s["ig_user_id"] = body["ig_user_id"]
+    if body.get("ig_access_token") and body["ig_access_token"] != "***":
+        s["ig_access_token"] = body["ig_access_token"]
+    if body.get("public_base_url") is not None:
+        s["public_base_url"] = body["public_base_url"].rstrip("/")
+    _save_settings(s)
+    return {"status": "saved"}
+
+
+@app.post("/api/settings/yt-credentials")
+async def upload_yt_credentials(file: UploadFile = File(...)) -> dict[str, str]:
+    content = await file.read()
+    try:
+        parsed = json.loads(content)
+        if "installed" not in parsed and "web" not in parsed:
+            raise ValueError("Not a valid OAuth client_secret JSON")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    YT_CREDS_FILE.write_bytes(content)
+    if YT_TOKEN_FILE.exists():
+        YT_TOKEN_FILE.unlink()
+    return {"status": "uploaded"}
+
+
+@app.get("/api/auth/youtube")
+async def youtube_auth_start(request: Request) -> RedirectResponse:
+    if not YT_CREDS_FILE.exists():
+        raise HTTPException(status_code=400, detail="Upload YouTube credentials first")
+    from google_auth_oauthlib.flow import Flow
+    redirect_uri = str(request.base_url).rstrip("/") + "/api/auth/youtube/callback"
+    flow = Flow.from_client_secrets_file(
+        str(YT_CREDS_FILE),
+        scopes=["https://www.googleapis.com/auth/youtube.upload"],
+        redirect_uri=redirect_uri,
+    )
+    auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
+    return RedirectResponse(auth_url)
+
+
+@app.get("/api/auth/youtube/callback")
+async def youtube_auth_callback(request: Request) -> HTMLResponse:
+    if not YT_CREDS_FILE.exists():
+        raise HTTPException(status_code=400, detail="Credentials missing")
+    from google_auth_oauthlib.flow import Flow
+    redirect_uri = str(request.base_url).rstrip("/") + "/api/auth/youtube/callback"
+    flow = Flow.from_client_secrets_file(
+        str(YT_CREDS_FILE),
+        scopes=["https://www.googleapis.com/auth/youtube.upload"],
+        redirect_uri=redirect_uri,
+    )
+    flow.fetch_token(authorization_response=str(request.url))
+    creds = flow.credentials
+    YT_TOKEN_FILE.write_text(json.dumps({
+        "token": creds.token,
+        "refresh_token": creds.refresh_token,
+        "token_uri": creds.token_uri,
+        "client_id": creds.client_id,
+        "client_secret": creds.client_secret,
+        "scopes": list(creds.scopes or []),
+    }))
+    return HTMLResponse("<script>window.close();opener && opener.location.reload();</script>"
+                        "<p>YouTube authorized! You can close this tab.</p>")
+
+
+@app.delete("/api/auth/youtube")
+async def youtube_revoke() -> dict[str, str]:
+    if YT_TOKEN_FILE.exists():
+        YT_TOKEN_FILE.unlink()
+    return {"status": "revoked"}
+
+
+# ---------------------------------------------------------------------------
+# Publish API
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/publish/instagram")
+async def publish_instagram(request: Request) -> dict[str, Any]:
+    body = await request.json()
+    filename: str = body.get("filename", "")
+    caption: str = body.get("caption", "")
+    s = _load_settings()
+
+    ig_user_id = s.get("ig_user_id", "").strip()
+    access_token = s.get("ig_access_token", "").strip()
+    public_base = s.get("public_base_url", "").strip()
+
+    if not ig_user_id or not access_token:
+        raise HTTPException(status_code=400, detail="Instagram credentials not configured in Settings")
+    if not public_base:
+        raise HTTPException(status_code=400, detail="Public base URL not set in Settings (e.g. https://reel.adityashah.blog)")
+
+    if not filename.startswith("reel_") or not filename.endswith(".mp4"):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not (OUTPUTS_DIR / filename).exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    video_url = f"{public_base}/api/output/{filename}"
+    base = "https://graph.facebook.com/v19.0"
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        # Step 1: create container
+        r = await client.post(f"{base}/{ig_user_id}/media", data={
+            "media_type": "REELS",
+            "video_url": video_url,
+            "caption": caption,
+            "share_to_feed": "true",
+            "access_token": access_token,
+        })
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"IG container create failed: {r.text}")
+        container_id = r.json().get("id")
+
+        # Step 2: poll until ready
+        for _ in range(30):
+            await asyncio.sleep(5)
+            s2 = await client.get(f"{base}/{container_id}", params={
+                "fields": "status_code,status",
+                "access_token": access_token,
+            })
+            status = s2.json().get("status_code", "")
+            if status == "FINISHED":
+                break
+            if status in ("ERROR", "EXPIRED"):
+                raise HTTPException(status_code=502, detail=f"IG video processing failed: {s2.text}")
+
+        # Step 3: publish
+        r2 = await client.post(f"{base}/{ig_user_id}/media_publish", data={
+            "creation_id": container_id,
+            "access_token": access_token,
+        })
+        if r2.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"IG publish failed: {r2.text}")
+
+        media_id = r2.json().get("id")
+        return {"status": "published", "media_id": media_id, "platform": "instagram"}
+
+
+@app.post("/api/publish/youtube")
+async def publish_youtube(request: Request) -> dict[str, Any]:
+    body = await request.json()
+    filename: str = body.get("filename", "")
+    title: str = body.get("title", "My Reel")
+    description: str = body.get("description", "")
+    privacy: str = body.get("privacy", "public")  # public | unlisted | private
+
+    if not YT_TOKEN_FILE.exists():
+        raise HTTPException(status_code=400, detail="YouTube not authorized — connect in Settings first")
+    if not filename.startswith("reel_") or not filename.endswith(".mp4"):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    path = OUTPUTS_DIR / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request as GRequest
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload
+
+    token_data = json.loads(YT_TOKEN_FILE.read_text())
+    creds = Credentials(
+        token=token_data["token"],
+        refresh_token=token_data["refresh_token"],
+        token_uri=token_data["token_uri"],
+        client_id=token_data["client_id"],
+        client_secret=token_data["client_secret"],
+        scopes=token_data["scopes"],
+    )
+    if creds.expired and creds.refresh_token:
+        creds.refresh(GRequest())
+        token_data["token"] = creds.token
+        YT_TOKEN_FILE.write_text(json.dumps(token_data))
+
+    def _upload() -> dict[str, Any]:
+        youtube = build("youtube", "v3", credentials=creds)
+        body_yt = {
+            "snippet": {
+                "title": title,
+                "description": description,
+                "categoryId": "22",  # People & Blogs
+            },
+            "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False},
+        }
+        media = MediaFileUpload(str(path), mimetype="video/mp4", resumable=True, chunksize=10 * 1024 * 1024)
+        req = youtube.videos().insert(part="snippet,status", body=body_yt, media_body=media)
+        response = None
+        while response is None:
+            _, response = req.next_chunk()
+        return response
+
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(None, _upload)
+    video_id = response.get("id", "")
+    return {
+        "status": "published",
+        "video_id": video_id,
+        "url": f"https://www.youtube.com/shorts/{video_id}",
+        "platform": "youtube",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Settings page
+# ---------------------------------------------------------------------------
+
+
+SETTINGS_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>ReelForge — Settings</title>
+<style>
+  :root {
+    --bg: #0f0f13; --surface: #1a1a23; --surface2: #23232f;
+    --accent: #FFD400; --text: #f0f0f5; --muted: #7a7a90;
+    --border: #2e2e3e; --success: #4ade80; --error: #f87171;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--text); min-height: 100vh; }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 18px 32px; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  header .logo { font-size: 22px; font-weight: 800; }
+  header .logo span { color: var(--accent); }
+  header nav { margin-left: auto; display: flex; gap: 8px; }
+  header nav a {
+    font-size: 13px; font-weight: 600; color: var(--muted);
+    text-decoration: none; padding: 6px 14px; border-radius: 8px;
+    border: 1px solid var(--border); transition: all 0.15s;
+  }
+  header nav a:hover, header nav a.active { color: var(--accent); border-color: var(--accent); }
+  .page { max-width: 680px; margin: 0 auto; padding: 40px 24px; }
+  h1 { font-size: 22px; font-weight: 800; margin-bottom: 6px; }
+  .page-sub { font-size: 14px; color: var(--muted); margin-bottom: 36px; }
+  .section {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 24px; margin-bottom: 20px;
+  }
+  .section-title {
+    font-size: 15px; font-weight: 700; margin-bottom: 4px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .section-sub { font-size: 13px; color: var(--muted); margin-bottom: 20px; }
+  label { display: block; font-size: 12px; font-weight: 600; color: var(--muted);
+          text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; margin-top: 14px; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 10px 14px; background: var(--surface2);
+    border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+    font-size: 14px; outline: none; transition: border-color 0.15s;
+  }
+  input:focus { border-color: var(--accent); }
+  .btn { display: inline-flex; align-items: center; gap: 6px;
+         padding: 9px 18px; border-radius: 8px; border: 1px solid var(--border);
+         background: var(--surface2); color: var(--text); font-size: 13px;
+         font-weight: 600; cursor: pointer; transition: all 0.15s; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-primary { background: var(--accent); color: #000; border-color: var(--accent); }
+  .btn-primary:hover { background: #ffe033; }
+  .btn-danger { color: var(--error); border-color: var(--error); background: none; }
+  .row { display: flex; gap: 10px; margin-top: 18px; align-items: center; flex-wrap: wrap; }
+  .tag { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
+         background: var(--success); color: #000; }
+  .tag.no { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
+  .msg { font-size: 13px; padding: 10px 14px; border-radius: 8px; margin-top: 14px; display: none; }
+  .msg.ok { background: rgba(74,222,128,0.15); color: var(--success); display: block; }
+  .msg.err { background: rgba(248,113,113,0.15); color: var(--error); display: block; }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">Reel<span>Forge</span></div>
+  <nav>
+    <a href="/">Render</a>
+    <a href="/library">Library</a>
+    <a href="/settings" class="active">Settings</a>
+  </nav>
+</header>
+
+<div class="page">
+  <h1>Settings</h1>
+  <div class="page-sub">Configure social publishing credentials. Stored locally, never sent anywhere.</div>
+
+  <!-- General -->
+  <div class="section">
+    <div class="section-title">🌐 General</div>
+    <div class="section-sub">Required for Instagram to fetch your video.</div>
+    <label>Public base URL (e.g. https://reel.adityashah.blog)</label>
+    <input type="text" id="public_base_url" placeholder="https://reel.adityashah.blog"/>
+    <div class="row">
+      <button class="btn btn-primary" onclick="saveGeneral()">Save</button>
+      <span id="general-msg" class="msg"></span>
+    </div>
+  </div>
+
+  <!-- Instagram -->
+  <div class="section">
+    <div class="section-title">📸 Instagram</div>
+    <div class="section-sub">Requires a Professional account (Creator or Business). Get a long-lived access token from the Meta Graph API Explorer.</div>
+    <label>Instagram User ID</label>
+    <input type="text" id="ig_user_id" placeholder="17841400000000000"/>
+    <label>Long-lived Access Token</label>
+    <input type="password" id="ig_access_token" placeholder="EAAxxxxxxxx…"/>
+    <div class="row">
+      <button class="btn btn-primary" onclick="saveIG()">Save</button>
+      <span id="ig-status" class="tag no">Not configured</span>
+      <span id="ig-msg" class="msg"></span>
+    </div>
+  </div>
+
+  <!-- YouTube -->
+  <div class="section">
+    <div class="section-title">▶ YouTube</div>
+    <div class="section-sub">Create a project at console.cloud.google.com → APIs → YouTube Data API v3 → Credentials → OAuth 2.0 Client ID (Desktop app) → Download JSON.</div>
+    <label>OAuth Credentials JSON</label>
+    <div class="row" style="margin-top:0">
+      <button class="btn" onclick="document.getElementById('yt-file').click()">📁 Upload client_secret.json</button>
+      <input type="file" id="yt-file" accept=".json" onchange="uploadYTCreds(this)"/>
+      <span id="yt-creds-status" class="tag no">No file</span>
+    </div>
+    <div class="row">
+      <button class="btn btn-primary" id="yt-auth-btn" onclick="startYTAuth()" disabled>🔗 Connect Google Account</button>
+      <button class="btn btn-danger" id="yt-revoke-btn" onclick="revokeYT()" style="display:none">Disconnect</button>
+      <span id="yt-auth-status" class="tag no">Not authorized</span>
+    </div>
+    <span id="yt-msg" class="msg"></span>
+  </div>
+</div>
+
+<script>
+async function loadSettings() {
+  const r = await fetch('/api/settings');
+  const s = await r.json();
+  document.getElementById('public_base_url').value = s.public_base_url || '';
+  document.getElementById('ig_user_id').value = s.ig_user_id || '';
+  if (s.ig_access_token) {
+    document.getElementById('ig_access_token').placeholder = '(saved)';
+    document.getElementById('ig-status').textContent = '✓ Configured';
+    document.getElementById('ig-status').classList.remove('no');
+  }
+  if (s.yt_credentials_uploaded) {
+    document.getElementById('yt-creds-status').textContent = '✓ Uploaded';
+    document.getElementById('yt-creds-status').classList.remove('no');
+    document.getElementById('yt-auth-btn').disabled = false;
+  }
+  if (s.yt_authorized) {
+    document.getElementById('yt-auth-status').textContent = '✓ Connected';
+    document.getElementById('yt-auth-status').classList.remove('no');
+    document.getElementById('yt-revoke-btn').style.display = '';
+  }
+}
+
+async function saveGeneral() {
+  const el = document.getElementById('general-msg');
+  el.className = 'msg';
+  const r = await fetch('/api/settings', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ public_base_url: document.getElementById('public_base_url').value.trim() }),
+  });
+  el.textContent = r.ok ? '✓ Saved' : 'Save failed';
+  el.className = r.ok ? 'msg ok' : 'msg err';
+}
+
+async function saveIG() {
+  const el = document.getElementById('ig-msg');
+  el.className = 'msg';
+  const r = await fetch('/api/settings', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      ig_user_id: document.getElementById('ig_user_id').value.trim(),
+      ig_access_token: document.getElementById('ig_access_token').value.trim(),
+    }),
+  });
+  el.textContent = r.ok ? '✓ Saved' : 'Save failed';
+  el.className = r.ok ? 'msg ok' : 'msg err';
+  if (r.ok) { document.getElementById('ig-status').textContent = '✓ Configured'; document.getElementById('ig-status').classList.remove('no'); }
+}
+
+async function uploadYTCreds(input) {
+  const el = document.getElementById('yt-msg');
+  el.className = 'msg';
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  const r = await fetch('/api/settings/yt-credentials', { method: 'POST', body: fd });
+  if (r.ok) {
+    document.getElementById('yt-creds-status').textContent = '✓ Uploaded';
+    document.getElementById('yt-creds-status').classList.remove('no');
+    document.getElementById('yt-auth-btn').disabled = false;
+    document.getElementById('yt-auth-status').textContent = 'Not authorized';
+    document.getElementById('yt-auth-status').className = 'tag no';
+    document.getElementById('yt-revoke-btn').style.display = 'none';
+  } else {
+    const err = await r.json();
+    el.textContent = err.detail || 'Upload failed';
+    el.className = 'msg err';
+  }
+}
+
+function startYTAuth() {
+  const w = window.open('/api/auth/youtube', '_blank', 'width=600,height=700');
+  const t = setInterval(() => {
+    if (w.closed) { clearInterval(t); location.reload(); }
+  }, 500);
+}
+
+async function revokeYT() {
+  if (!confirm('Disconnect YouTube?')) return;
+  await fetch('/api/auth/youtube', { method: 'DELETE' });
+  location.reload();
+}
+
+loadSettings();
+</script>
+</body>
+</html>"""
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page() -> HTMLResponse:
+    return HTMLResponse(SETTINGS_HTML)
+
+
+# ---------------------------------------------------------------------------
 # Library — list all completed reels on disk
 # ---------------------------------------------------------------------------
 
@@ -1346,6 +1814,42 @@ LIBRARY_HTML = r"""<!DOCTYPE html>
     border: 1px solid var(--border); transition: all 0.15s;
   }
   header nav a:hover, header nav a.active { color: var(--accent); border-color: var(--accent); }
+
+  /* Publish modal */
+  .pub-modal-bg {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.85); z-index: 200;
+    align-items: center; justify-content: center;
+  }
+  .pub-modal-bg.open { display: flex; }
+  .pub-modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 24px; max-width: 460px; width: 90%;
+  }
+  .pub-title { font-size: 16px; font-weight: 800; margin-bottom: 6px; }
+  .pub-sub { font-size: 13px; color: var(--muted); margin-bottom: 18px; }
+  .platform-toggle { display: flex; gap: 10px; margin-bottom: 18px; }
+  .plat-btn {
+    flex: 1; padding: 12px; border-radius: 10px;
+    border: 2px solid var(--border); background: var(--surface2);
+    color: var(--muted); font-size: 13px; font-weight: 700;
+    cursor: pointer; text-align: center; transition: all 0.15s;
+  }
+  .plat-btn.on { border-color: var(--accent); color: var(--accent); background: rgba(255,212,0,0.08); }
+  .pub-field { margin-bottom: 14px; }
+  .pub-field label { display: block; font-size: 11px; font-weight: 700; color: var(--muted);
+                     text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 5px; }
+  .pub-field input, .pub-field textarea, .pub-field select {
+    width: 100%; padding: 9px 12px; background: var(--surface2);
+    border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+    font-size: 13px; outline: none; transition: border-color 0.15s;
+    font-family: inherit; resize: vertical;
+  }
+  .pub-field input:focus, .pub-field textarea:focus, .pub-field select:focus { border-color: var(--accent); }
+  .pub-actions { display: flex; gap: 10px; margin-top: 20px; }
+  .pub-status { font-size: 13px; color: var(--muted); margin-top: 10px; min-height: 20px; }
+  .pub-status.ok { color: var(--success); }
+  .pub-status.err { color: var(--error); }
 
   .page { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
   .page-title { font-size: 24px; font-weight: 800; margin-bottom: 6px; }
@@ -1444,6 +1948,7 @@ LIBRARY_HTML = r"""<!DOCTYPE html>
   <nav>
     <a href="/">Render</a>
     <a href="/library" class="active">Library</a>
+    <a href="/settings">Settings</a>
   </nav>
 </header>
 
@@ -1467,6 +1972,43 @@ LIBRARY_HTML = r"""<!DOCTYPE html>
     <div style="display:flex;gap:8px;margin-top:12px;">
       <a id="modal-dl" class="btn btn-primary" download>⬇ Download</a>
       <button class="btn" onclick="closeModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Publish modal -->
+<div class="pub-modal-bg" id="pub-modal">
+  <div class="pub-modal">
+    <div class="pub-title">📤 Publish Reel</div>
+    <div class="pub-sub" id="pub-filename"></div>
+
+    <div class="platform-toggle">
+      <button class="plat-btn" id="plat-ig" onclick="togglePlat('ig')">📸 Instagram</button>
+      <button class="plat-btn" id="plat-yt" onclick="togglePlat('yt')">▶ YouTube</button>
+    </div>
+
+    <div class="pub-field">
+      <label>Caption / Description</label>
+      <textarea id="pub-caption" rows="3" placeholder="Write your caption…"></textarea>
+    </div>
+    <div class="pub-field" id="pub-title-field">
+      <label>YouTube Title</label>
+      <input type="text" id="pub-yt-title" placeholder="My Reel"/>
+    </div>
+    <div class="pub-field" id="pub-privacy-field">
+      <label>YouTube Privacy</label>
+      <select id="pub-privacy">
+        <option value="public">Public</option>
+        <option value="unlisted">Unlisted</option>
+        <option value="private">Private</option>
+      </select>
+    </div>
+
+    <div class="pub-status" id="pub-status"></div>
+
+    <div class="pub-actions">
+      <button class="btn btn-primary" id="pub-go-btn" onclick="doPublish()">Publish</button>
+      <button class="btn" onclick="closePubModal()">Cancel</button>
     </div>
   </div>
 </div>
@@ -1504,7 +2046,8 @@ async function loadLibrary() {
         ${clipPills ? `<div class="reel-clips">${clipPills}</div>` : ''}
         <div class="reel-actions">
           <a class="btn btn-primary" href="/api/output/${reel.filename}" download="${reel.filename}">⬇ Download</a>
-          <button class="btn" onclick="openModal('${reel.filename}','${reel.label}')">▶ Preview</button>
+          <button class="btn" onclick="openModal('${reel.filename}','${reel.label}')">▶</button>
+          <button class="btn" onclick="openPubModal('${reel.filename}','${reel.label}')" title="Publish">📤</button>
           <button class="btn btn-danger" onclick="deleteReel('${reel.filename}', this)" title="Delete">🗑</button>
         </div>
       </div>
@@ -1553,6 +2096,87 @@ function updateCount() {
   if (n === 0) document.getElementById('grid').innerHTML =
     '<div class="empty">No reels yet. <a href="/">Render your first one →</a></div>';
 }
+
+// ---- Publish modal ----
+let _pubFile = '';
+let _pubPlatforms = new Set();
+
+function openPubModal(filename, label) {
+  _pubFile = filename;
+  _pubPlatforms = new Set();
+  document.getElementById('pub-filename').textContent = label || filename;
+  document.getElementById('pub-caption').value = '';
+  document.getElementById('pub-yt-title').value = label || '';
+  document.getElementById('pub-status').textContent = '';
+  document.getElementById('pub-status').className = 'pub-status';
+  document.getElementById('pub-go-btn').disabled = false;
+  document.getElementById('pub-go-btn').textContent = 'Publish';
+  ['plat-ig','plat-yt'].forEach(id => document.getElementById(id).classList.remove('on'));
+  updatePubFields();
+  document.getElementById('pub-modal').classList.add('open');
+}
+
+function closePubModal() { document.getElementById('pub-modal').classList.remove('open'); }
+
+function togglePlat(p) {
+  if (_pubPlatforms.has(p)) _pubPlatforms.delete(p); else _pubPlatforms.add(p);
+  document.getElementById('plat-ig').className = 'plat-btn' + (_pubPlatforms.has('ig') ? ' on' : '');
+  document.getElementById('plat-yt').className = 'plat-btn' + (_pubPlatforms.has('yt') ? ' on' : '');
+  updatePubFields();
+}
+
+function updatePubFields() {
+  const hasYT = _pubPlatforms.has('yt');
+  document.getElementById('pub-title-field').style.display = hasYT ? '' : 'none';
+  document.getElementById('pub-privacy-field').style.display = hasYT ? '' : 'none';
+}
+
+async function doPublish() {
+  if (_pubPlatforms.size === 0) {
+    const el = document.getElementById('pub-status');
+    el.textContent = 'Pick at least one platform';
+    el.className = 'pub-status err';
+    return;
+  }
+  const btn = document.getElementById('pub-go-btn');
+  btn.disabled = true;
+  btn.textContent = 'Publishing…';
+  const caption = document.getElementById('pub-caption').value;
+  const title = document.getElementById('pub-yt-title').value || _pubFile;
+  const privacy = document.getElementById('pub-privacy').value;
+  const results = [];
+
+  for (const plat of _pubPlatforms) {
+    const el = document.getElementById('pub-status');
+    el.textContent = `Posting to ${plat === 'ig' ? 'Instagram' : 'YouTube'}…`;
+    el.className = 'pub-status';
+    try {
+      const body = plat === 'ig'
+        ? { filename: _pubFile, caption }
+        : { filename: _pubFile, title, description: caption, privacy };
+      const r = await fetch(`/api/publish/${plat === 'ig' ? 'instagram' : 'youtube'}`, {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || 'Unknown error');
+      if (plat === 'yt' && data.url) results.push(`YouTube: ✓ <a href="${data.url}" target="_blank">View Reel</a>`);
+      else results.push(`${plat === 'ig' ? 'Instagram' : 'YouTube'}: ✓ Published`);
+    } catch(e) {
+      results.push(`${plat === 'ig' ? 'Instagram' : 'YouTube'}: ✗ ${e.message}`);
+    }
+  }
+
+  const allOk = results.every(r => r.includes('✓'));
+  const el = document.getElementById('pub-status');
+  el.innerHTML = results.join('<br>');
+  el.className = 'pub-status ' + (allOk ? 'ok' : 'err');
+  btn.textContent = 'Done';
+}
+
+document.getElementById('pub-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('pub-modal')) closePubModal();
+});
+updatePubFields();
 
 loadLibrary();
 </script>
