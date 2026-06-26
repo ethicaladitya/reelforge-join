@@ -499,7 +499,7 @@ UI_HTML = r"""<!DOCTYPE html>
         <div class="drop-icon">📁</div>
         <p><strong>Drop video clips here</strong></p>
         <p style="margin-top:6px">or click to browse · MP4, MOV, WebM, MKV</p>
-        <p style="margin-top:8px;font-size:12px">Files are sorted by name — prefix with 01_, 02_, … to control order</p>
+        <p style="margin-top:8px;font-size:12px">Files appear in the order you drop them — drag rows to reorder</p>
       </div>
       <input type="file" id="file-input" multiple accept=".mp4,.mov,.webm,.mkv"/>
       <div id="clip-list"></div>
@@ -656,12 +656,13 @@ dropZone.addEventListener('drop', e => {
 function addFiles(files) {
   const videoExts = ['.mp4','.mov','.webm','.mkv'];
   const valid = files.filter(f => videoExts.some(e => f.name.toLowerCase().endsWith(e)));
+  // Append in the order the user selected/dropped — no auto-sort.
+  // Use drag-and-drop handles to reorder manually.
   valid.forEach(f => {
     if (!clips.find(c => c.name === f.name)) {
       clips.push({ file: f, name: f.name, size: f.size, uploadedName: null });
     }
   });
-  clips.sort((a,b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
   renderClipList();
 }
 
