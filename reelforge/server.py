@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import aiofiles
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -1019,7 +1019,7 @@ async def index() -> HTMLResponse:
 @app.post("/api/upload/clip")
 async def upload_clip(
     file: UploadFile = File(...),
-    session_id: str = "",
+    session_id: str = Form(""),
 ) -> dict[str, str]:
     """Upload a clip into a session-scoped directory to preserve order."""
     sid = session_id or "default"
@@ -1039,7 +1039,7 @@ async def upload_clip(
 @app.post("/api/upload/music")
 async def upload_music(
     file: UploadFile = File(...),
-    session_id: str = "",
+    session_id: str = Form(""),
 ) -> dict[str, str]:
     sid = session_id or "default"
     music_dir = UPLOADS_DIR / sid / "music"
