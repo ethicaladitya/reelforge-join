@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Any
 
 import aiofiles
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import load_config
@@ -1208,11 +1208,57 @@ async def websocket_progress(websocket: WebSocket, job_id: str) -> None:
 
 
 @app.get("/api/output/{filename}")
-async def serve_output(filename: str) -> FileResponse:
+async def serve_output(filename: str, request: Request) -> Response:
     path = OUTPUTS_DIR / filename
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Output not found")
-    return FileResponse(path, media_type="video/mp4", filename=filename)
+
+    file_size = path.stat().st_size
+    range_header = request.headers.get("range")
+
+    if range_header:
+        # Parse "bytes=start-end"
+        try:
+            range_val = range_header.strip().replace("bytes=", "")
+            start_str, _, end_str = range_val.partition("-")
+            start = int(start_str) if start_str else 0
+            end = int(end_str) if end_str else file_size - 1
+        except ValueError:
+            raise HTTPException(status_code=416, detail="Invalid range")
+
+        end = min(end, file_size - 1)
+        if start > end or start >= file_size:
+            raise HTTPException(status_code=416, detail="Range not satisfiable")
+
+        chunk_size = end - start + 1
+
+        def iterfile():
+            with open(path, "rb") as f:
+                f.seek(start)
+                remaining = chunk_size
+                while remaining:
+                    data = f.read(min(65536, remaining))
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        return StreamingResponse(
+            iterfile(),
+            status_code=206,
+            media_type="video/mp4",
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(chunk_size),
+            },
+        )
+
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        headers={"Accept-Ranges": "bytes", "Content-Length": str(file_size)},
+    )
 
 
 @app.delete("/api/output/{filename}")
