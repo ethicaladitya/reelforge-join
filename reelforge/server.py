@@ -502,6 +502,10 @@ UI_HTML = r"""<!DOCTYPE html>
         <p style="margin-top:8px;font-size:12px">Files appear in the order you drop them — drag rows to reorder</p>
       </div>
       <input type="file" id="file-input" multiple accept=".mp4,.mov,.webm,.mkv"/>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;margin-bottom:4px;min-height:28px;" id="clip-list-header" style="display:none">
+        <span style="font-size:11px;color:var(--muted);" id="clip-count"></span>
+        <button id="sort-btn" onclick="toggleSort()" style="font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--muted);cursor:pointer;transition:all 0.15s;">⇅ Auto-sort</button>
+      </div>
       <div id="clip-list"></div>
     </div>
 
@@ -635,6 +639,7 @@ let musicFile = null;
 let currentJobId = null;
 let ws = null;
 let sessionId = crypto.randomUUID(); // fresh session per page load
+let autoSort = false;
 
 // ─────────────────────────────────────────────
 // Drop zone
@@ -653,25 +658,48 @@ dropZone.addEventListener('drop', e => {
   addFiles([...e.dataTransfer.files]);
 });
 
+function naturalKey(name) {
+  return name.replace(/(\d+)/g, n => n.padStart(10, '0')).toLowerCase();
+}
+
 function addFiles(files) {
   const videoExts = ['.mp4','.mov','.webm','.mkv'];
   const valid = files.filter(f => videoExts.some(e => f.name.toLowerCase().endsWith(e)));
-  // Append in the order the user selected/dropped — no auto-sort.
-  // Use drag-and-drop handles to reorder manually.
   valid.forEach(f => {
-    if (!clips.find(c => c.name === f.name)) {
+    if (!clips.find(c => c.name === f.name))
       clips.push({ file: f, name: f.name, size: f.size, uploadedName: null });
-    }
   });
+  if (autoSort) clips.sort((a, b) => naturalKey(a.name).localeCompare(naturalKey(b.name)));
+  renderClipList();
+}
+
+function toggleSort() {
+  autoSort = !autoSort;
+  const btn = document.getElementById('sort-btn');
+  if (autoSort) {
+    clips.sort((a, b) => naturalKey(a.name).localeCompare(naturalKey(b.name)));
+    btn.style.color = 'var(--accent)';
+    btn.style.borderColor = 'var(--accent)';
+    btn.textContent = '⇅ Auto-sort ON';
+  } else {
+    btn.style.color = 'var(--muted)';
+    btn.style.borderColor = 'var(--border)';
+    btn.textContent = '⇅ Auto-sort';
+  }
   renderClipList();
 }
 
 function renderClipList() {
   const list = document.getElementById('clip-list');
+  const hdr = document.getElementById('clip-list-header');
   if (clips.length === 0) {
     list.innerHTML = '';
+    hdr.style.display = 'none';
     return;
   }
+  hdr.style.display = 'flex';
+  document.getElementById('clip-count').textContent = `${clips.length} clip${clips.length > 1 ? 's' : ''}`;
+
   list.innerHTML = clips.map((c, i) => `
     <div class="clip-item" draggable="true" data-idx="${i}"
          ondragstart="dragStart(event,${i})" ondragover="dragOver(event,${i})"
