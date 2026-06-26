@@ -16,11 +16,14 @@ from typing import Any
 
 import aiofiles
 import os
+import secrets
 
 import httpx
+from authlib.integrations.httpx_client import AsyncOAuth2Client
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 
 from .config import load_config
 from .exceptions import ReelForgeError
@@ -186,31 +189,125 @@ def _run_pipeline_thread(
 
 
 BASE_DIR = Path(__file__).parent.parent
-UPLOADS_DIR = BASE_DIR / "output" / "_uploads"
-OUTPUTS_DIR = BASE_DIR / "output"
-SETTINGS_FILE = BASE_DIR / "output" / "_settings.json"
-YT_TOKEN_FILE = BASE_DIR / "output" / "_yt_token.json"
-YT_CREDS_FILE = BASE_DIR / "output" / "_yt_credentials.json"
+USERS_DIR = BASE_DIR / "output" / "users"  # per-user data root
+
+# Google OAuth config — read from env or fall back to stored config
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+_GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+
+# Session secret — persist across restarts
+_SECRET_FILE = BASE_DIR / "output" / "_secret.key"
 
 
-def _load_settings() -> dict[str, Any]:
-    if SETTINGS_FILE.exists():
-        return json.loads(SETTINGS_FILE.read_text())
-    return {}
+def _get_session_secret() -> str:
+    if _SECRET_FILE.exists():
+        return _SECRET_FILE.read_text().strip()
+    secret = secrets.token_hex(32)
+    _SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _SECRET_FILE.write_text(secret)
+    return secret
 
 
-def _save_settings(data: dict[str, Any]) -> None:
-    SETTINGS_FILE.write_text(json.dumps(data, indent=2))
+# ---------------------------------------------------------------------------
+# Per-user path helpers
+# ---------------------------------------------------------------------------
+
+
+def user_dir(uid: str) -> Path:
+    return USERS_DIR / uid
+
+
+def user_outputs(uid: str) -> Path:
+    return user_dir(uid) / "reels"
+
+
+def user_uploads(uid: str) -> Path:
+    return user_dir(uid) / "uploads"
+
+
+def user_settings_file(uid: str) -> Path:
+    return user_dir(uid) / "settings.json"
+
+
+def user_yt_token(uid: str) -> Path:
+    return user_dir(uid) / "yt_token.json"
+
+
+def user_yt_creds(uid: str) -> Path:
+    return user_dir(uid) / "yt_credentials.json"
+
+
+def _load_settings(uid: str) -> dict[str, Any]:
+    f = user_settings_file(uid)
+    return json.loads(f.read_text()) if f.exists() else {}
+
+
+def _save_settings(uid: str, data: dict[str, Any]) -> None:
+    user_settings_file(uid).write_text(json.dumps(data, indent=2))
+
+
+def _ensure_user_dirs(uid: str) -> None:
+    user_outputs(uid).mkdir(parents=True, exist_ok=True)
+    user_uploads(uid).mkdir(parents=True, exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Auth helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_user(request: Request) -> dict[str, Any] | None:
+    return request.session.get("user")
+
+
+def _require_user(request: Request) -> dict[str, Any]:
+    user = _get_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+def _require_user_page(request: Request) -> dict[str, Any]:
+    """For HTML pages — raises redirect instead of 401."""
+    user = _get_user(request)
+    if not user:
+        raise _LoginRedirect(str(request.url))
+    return user
+
+
+class _LoginRedirect(Exception):
+    def __init__(self, next_url: str = "/") -> None:
+        self.next_url = next_url
+
+
+def _google_configured() -> bool:
+    return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[type-arg]
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    USERS_DIR.mkdir(parents=True, exist_ok=True)
     yield
 
 
 app = FastAPI(title="ReelForge", version="0.1.0", lifespan=lifespan)
+app.add_middleware(SessionMiddleware, secret_key=_get_session_secret(), max_age=30 * 24 * 3600)
+
+
+# ---------------------------------------------------------------------------
+# Exception handler for login redirects
+# ---------------------------------------------------------------------------
+
+
+from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
+
+
+@app.exception_handler(_LoginRedirect)
+async def _login_redirect_handler(request: Request, exc: _LoginRedirect) -> RedirectResponse:
+    return RedirectResponse(f"/auth/login?next={exc.next_url}")
 
 
 # ---------------------------------------------------------------------------
@@ -501,9 +598,19 @@ UI_HTML = r"""<!DOCTYPE html>
     <a href="/" style="color:var(--accent);border-color:var(--accent);">Render</a>
     <a href="/library">Library</a>
     <a href="/settings">Settings</a>
+    <a href="/auth/logout" id="nav-user" title="Sign out" style="display:flex;align-items:center;gap:6px;">
+      <img id="nav-avatar" src="" width="22" height="22" style="border-radius:50%;display:none"/>
+      <span id="nav-name"></span> · Sign out
+    </a>
   </nav>
-  <div class="badge">v0.1.0</div>
 </header>
+<script>
+fetch('/api/me').then(r=>r.json()).then(u=>{
+  document.getElementById('nav-name').textContent = u.name.split(' ')[0];
+  const img = document.getElementById('nav-avatar');
+  if(u.picture){img.src=u.picture;img.style.display='';}
+}).catch(()=>{});
+</script>
 
 <main>
   <!-- LEFT: Clips + Settings -->
@@ -1053,8 +1160,154 @@ function resetUI() {
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index() -> HTMLResponse:
+async def index(request: Request) -> HTMLResponse:
+    _require_user_page(request)
     return HTMLResponse(UI_HTML)
+
+
+# ---------------------------------------------------------------------------
+# Google OAuth routes
+# ---------------------------------------------------------------------------
+
+LOGIN_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>ReelForge — Sign in</title>
+<style>
+  :root { --bg:#0f0f13; --surface:#1a1a23; --accent:#FFD400; --text:#f0f0f5; --muted:#7a7a90; --border:#2e2e3e; --radius:12px; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+         background:var(--bg); color:var(--text); min-height:100vh;
+         display:flex; align-items:center; justify-content:center; }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+          padding:48px 40px; max-width:380px; width:90%; text-align:center; }
+  .logo { font-size:32px; font-weight:900; margin-bottom:8px; }
+  .logo span { color:var(--accent); }
+  .tagline { font-size:14px; color:var(--muted); margin-bottom:36px; }
+  .signin-btn {
+    display:inline-flex; align-items:center; gap:12px;
+    padding:14px 24px; border-radius:10px;
+    background:#fff; color:#1f1f1f; font-size:15px; font-weight:600;
+    border:none; cursor:pointer; text-decoration:none; transition:opacity 0.15s;
+    width:100%; justify-content:center;
+  }
+  .signin-btn:hover { opacity:0.9; }
+  .signin-btn svg { flex-shrink:0; }
+  .not-configured { font-size:13px; color:var(--muted); margin-top:24px;
+                    padding:14px; border:1px solid var(--border); border-radius:8px; }
+  .not-configured code { color:var(--accent); font-size:12px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Reel<span>Forge</span></div>
+  <div class="tagline">AI clips → polished vertical reels</div>
+  {body}
+</div>
+</body>
+</html>"""
+
+_SIGNIN_BTN = """<a class="signin-btn" href="/auth/google">
+  <svg width="20" height="20" viewBox="0 0 48 48">
+    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+  </svg>
+  Sign in with Google
+</a>"""
+
+_NOT_CONFIGURED = """<div class="not-configured">
+  Google OAuth not configured.<br/>
+  Set <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> env vars<br/>
+  then restart the server.
+</div>"""
+
+
+@app.get("/auth/login", response_class=HTMLResponse)
+async def login_page(request: Request) -> HTMLResponse:
+    if _get_user(request):
+        return RedirectResponse("/")  # type: ignore[return-value]
+    body = _SIGNIN_BTN if _google_configured() else _NOT_CONFIGURED
+    return HTMLResponse(LOGIN_HTML.replace("{body}", body))
+
+
+@app.get("/auth/google")
+async def google_login(request: Request) -> RedirectResponse:
+    if not _google_configured():
+        raise HTTPException(status_code=503, detail="Google OAuth not configured")
+    next_url = request.query_params.get("next", "/")
+    state = secrets.token_urlsafe(16) + "|" + next_url
+    request.session["oauth_state"] = state
+    redirect_uri = str(request.base_url).rstrip("/") + "/auth/google/callback"
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "access_type": "offline",
+        "prompt": "select_account",
+    }
+    from urllib.parse import urlencode
+    return RedirectResponse(f"{_GOOGLE_AUTH_URL}?{urlencode(params)}")
+
+
+@app.get("/auth/google/callback")
+async def google_callback(request: Request) -> RedirectResponse:
+    state = request.query_params.get("state", "")
+    saved_state = request.session.pop("oauth_state", "")
+    next_url = "/"
+    if "|" in state:
+        _, next_url = state.split("|", 1)
+
+    code = request.query_params.get("code")
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing auth code")
+
+    redirect_uri = str(request.base_url).rstrip("/") + "/auth/google/callback"
+
+    async with httpx.AsyncClient() as client:
+        token_resp = await client.post(_GOOGLE_TOKEN_URL, data={
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        })
+        if token_resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="Token exchange failed")
+        tokens = token_resp.json()
+        access_token = tokens.get("access_token")
+
+        user_resp = await client.get(_GOOGLE_USERINFO_URL,
+                                     headers={"Authorization": f"Bearer {access_token}"})
+        if user_resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="Userinfo fetch failed")
+        user_info = user_resp.json()
+
+    request.session["user"] = {
+        "sub": user_info["sub"],
+        "email": user_info.get("email", ""),
+        "name": user_info.get("name", ""),
+        "picture": user_info.get("picture", ""),
+    }
+    _ensure_user_dirs(user_info["sub"])
+    return RedirectResponse(next_url if next_url.startswith("/") else "/")
+
+
+@app.get("/auth/logout")
+async def logout(request: Request) -> RedirectResponse:
+    request.session.clear()
+    return RedirectResponse("/auth/login")
+
+
+@app.get("/api/me")
+async def me(request: Request) -> dict[str, Any]:
+    user = _require_user(request)
+    return {"email": user["email"], "name": user["name"], "picture": user["picture"]}
 
 
 # ---------------------------------------------------------------------------
@@ -1064,12 +1317,15 @@ async def index() -> HTMLResponse:
 
 @app.post("/api/upload/clip")
 async def upload_clip(
+    request: Request,
     file: UploadFile = File(...),
     session_id: str = Form(""),
 ) -> dict[str, str]:
     """Upload a clip into a session-scoped directory to preserve order."""
+    user = _require_user(request)
+    uid = user["sub"]
     sid = session_id or "default"
-    session_dir = UPLOADS_DIR / sid / "clips"
+    session_dir = user_uploads(uid) / sid / "clips"
     session_dir.mkdir(parents=True, exist_ok=True)
 
     safe_name = Path(file.filename or "clip.mp4").name
@@ -1084,11 +1340,14 @@ async def upload_clip(
 
 @app.post("/api/upload/music")
 async def upload_music(
+    request: Request,
     file: UploadFile = File(...),
     session_id: str = Form(""),
 ) -> dict[str, str]:
+    user = _require_user(request)
+    uid = user["sub"]
     sid = session_id or "default"
-    music_dir = UPLOADS_DIR / sid / "music"
+    music_dir = user_uploads(uid) / sid / "music"
     music_dir.mkdir(parents=True, exist_ok=True)
 
     safe_name = Path(file.filename or "music.mp3").name
@@ -1118,9 +1377,13 @@ class RenderPayload(BaseModel):
 
 
 @app.post("/api/render")
-async def start_render(payload: RenderPayload) -> dict[str, str]:
+async def start_render(request: Request, payload: RenderPayload) -> dict[str, str]:
+    user = _require_user(request)
+    uid = user["sub"]
+    _ensure_user_dirs(uid)
+
     sid = payload.session_id or "default"
-    clips_dir = UPLOADS_DIR / sid / "clips"
+    clips_dir = user_uploads(uid) / sid / "clips"
 
     if not clips_dir.exists():
         raise HTTPException(status_code=400, detail="No clips uploaded for this session")
@@ -1136,22 +1399,20 @@ async def start_render(payload: RenderPayload) -> dict[str, str]:
         raise HTTPException(status_code=400, detail="None of the specified clips were found")
 
     jid = _new_job()
-
-    # Store label + clip names for library display
     _update_job(
         jid,
         label=payload.label or f"Reel {jid[:6]}",
         clip_names=[p.name for p in ordered_clips],
+        user_id=uid,
     )
 
-    output_path = OUTPUTS_DIR / f"reel_{jid[:8]}.mp4"
+    output_path = user_outputs(uid) / f"reel_{jid[:8]}.mp4"
 
     music_path: Path | None = None
     if payload.music:
-        music_path = UPLOADS_DIR / sid / "music" / payload.music
+        music_path = user_uploads(uid) / sid / "music" / payload.music
 
-    # Pass ordered clips via a symlinked staging dir so pipeline sorts correctly
-    staging_dir = UPLOADS_DIR / sid / f"stage_{jid[:8]}"
+    staging_dir = user_uploads(uid) / sid / f"stage_{jid[:8]}"
     staging_dir.mkdir(parents=True, exist_ok=True)
     for i, src in enumerate(ordered_clips):
         dst = staging_dir / f"{i+1:03d}_{src.name}"
@@ -1226,7 +1487,8 @@ async def websocket_progress(websocket: WebSocket, job_id: str) -> None:
 
 @app.get("/api/output/{filename}")
 async def serve_output(filename: str, request: Request) -> Response:
-    path = OUTPUTS_DIR / filename
+    user = _require_user(request)
+    path = user_outputs(user["sub"]) / filename
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Output not found")
 
@@ -1279,11 +1541,11 @@ async def serve_output(filename: str, request: Request) -> Response:
 
 
 @app.delete("/api/output/{filename}")
-async def delete_output(filename: str) -> dict[str, str]:
-    # Safety: only allow deleting reel_*.mp4 files in the output dir
+async def delete_output(filename: str, request: Request) -> dict[str, str]:
+    user = _require_user(request)
     if not filename.startswith("reel_") or not filename.endswith(".mp4"):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    path = OUTPUTS_DIR / filename
+    path = user_outputs(user["sub"]) / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found")
     path.unlink()
@@ -1296,33 +1558,39 @@ async def delete_output(filename: str) -> dict[str, str]:
 
 
 @app.get("/api/settings")
-async def get_settings() -> dict[str, Any]:
-    s = _load_settings()
+async def get_settings(request: Request) -> dict[str, Any]:
+    user = _require_user(request)
+    uid = user["sub"]
+    s = _load_settings(uid)
     return {
         "ig_user_id": s.get("ig_user_id", ""),
         "ig_access_token": "***" if s.get("ig_access_token") else "",
         "public_base_url": s.get("public_base_url", ""),
-        "yt_credentials_uploaded": YT_CREDS_FILE.exists(),
-        "yt_authorized": YT_TOKEN_FILE.exists(),
+        "yt_credentials_uploaded": user_yt_creds(uid).exists(),
+        "yt_authorized": user_yt_token(uid).exists(),
     }
 
 
 @app.post("/api/settings")
 async def save_settings(request: Request) -> dict[str, str]:
+    user = _require_user(request)
+    uid = user["sub"]
     body = await request.json()
-    s = _load_settings()
+    s = _load_settings(uid)
     if body.get("ig_user_id") is not None:
         s["ig_user_id"] = body["ig_user_id"]
     if body.get("ig_access_token") and body["ig_access_token"] != "***":
         s["ig_access_token"] = body["ig_access_token"]
     if body.get("public_base_url") is not None:
         s["public_base_url"] = body["public_base_url"].rstrip("/")
-    _save_settings(s)
+    _save_settings(uid, s)
     return {"status": "saved"}
 
 
 @app.post("/api/settings/yt-credentials")
-async def upload_yt_credentials(file: UploadFile = File(...)) -> dict[str, str]:
+async def upload_yt_credentials(request: Request, file: UploadFile = File(...)) -> dict[str, str]:
+    user = _require_user(request)
+    uid = user["sub"]
     content = await file.read()
     try:
         parsed = json.loads(content)
@@ -1330,41 +1598,47 @@ async def upload_yt_credentials(file: UploadFile = File(...)) -> dict[str, str]:
             raise ValueError("Not a valid OAuth client_secret JSON")
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    YT_CREDS_FILE.write_bytes(content)
-    if YT_TOKEN_FILE.exists():
-        YT_TOKEN_FILE.unlink()
+    _ensure_user_dirs(uid)
+    user_yt_creds(uid).write_bytes(content)
+    if user_yt_token(uid).exists():
+        user_yt_token(uid).unlink()
     return {"status": "uploaded"}
 
 
 @app.get("/api/auth/youtube")
 async def youtube_auth_start(request: Request) -> RedirectResponse:
-    if not YT_CREDS_FILE.exists():
+    user = _require_user(request)
+    uid = user["sub"]
+    if not user_yt_creds(uid).exists():
         raise HTTPException(status_code=400, detail="Upload YouTube credentials first")
     from google_auth_oauthlib.flow import Flow
     redirect_uri = str(request.base_url).rstrip("/") + "/api/auth/youtube/callback"
     flow = Flow.from_client_secrets_file(
-        str(YT_CREDS_FILE),
+        str(user_yt_creds(uid)),
         scopes=["https://www.googleapis.com/auth/youtube.upload"],
         redirect_uri=redirect_uri,
     )
-    auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
+    auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline",
+                                          state=uid)
     return RedirectResponse(auth_url)
 
 
 @app.get("/api/auth/youtube/callback")
 async def youtube_auth_callback(request: Request) -> HTMLResponse:
-    if not YT_CREDS_FILE.exists():
+    uid = request.query_params.get("state", "")
+    creds_file = user_yt_creds(uid) if uid else None
+    if not creds_file or not creds_file.exists():
         raise HTTPException(status_code=400, detail="Credentials missing")
     from google_auth_oauthlib.flow import Flow
     redirect_uri = str(request.base_url).rstrip("/") + "/api/auth/youtube/callback"
     flow = Flow.from_client_secrets_file(
-        str(YT_CREDS_FILE),
+        str(creds_file),
         scopes=["https://www.googleapis.com/auth/youtube.upload"],
         redirect_uri=redirect_uri,
     )
     flow.fetch_token(authorization_response=str(request.url))
     creds = flow.credentials
-    YT_TOKEN_FILE.write_text(json.dumps({
+    user_yt_token(uid).write_text(json.dumps({
         "token": creds.token,
         "refresh_token": creds.refresh_token,
         "token_uri": creds.token_uri,
@@ -1377,9 +1651,11 @@ async def youtube_auth_callback(request: Request) -> HTMLResponse:
 
 
 @app.delete("/api/auth/youtube")
-async def youtube_revoke() -> dict[str, str]:
-    if YT_TOKEN_FILE.exists():
-        YT_TOKEN_FILE.unlink()
+async def youtube_revoke(request: Request) -> dict[str, str]:
+    user = _require_user(request)
+    t = user_yt_token(user["sub"])
+    if t.exists():
+        t.unlink()
     return {"status": "revoked"}
 
 
@@ -1390,10 +1666,12 @@ async def youtube_revoke() -> dict[str, str]:
 
 @app.post("/api/publish/instagram")
 async def publish_instagram(request: Request) -> dict[str, Any]:
+    user = _require_user(request)
+    uid = user["sub"]
     body = await request.json()
     filename: str = body.get("filename", "")
     caption: str = body.get("caption", "")
-    s = _load_settings()
+    s = _load_settings(uid)
 
     ig_user_id = s.get("ig_user_id", "").strip()
     access_token = s.get("ig_access_token", "").strip()
@@ -1406,7 +1684,7 @@ async def publish_instagram(request: Request) -> dict[str, Any]:
 
     if not filename.startswith("reel_") or not filename.endswith(".mp4"):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    if not (OUTPUTS_DIR / filename).exists():
+    if not (user_outputs(uid) / filename).exists():
         raise HTTPException(status_code=404, detail="File not found")
 
     video_url = f"{public_base}/api/output/{filename}"
@@ -1452,17 +1730,20 @@ async def publish_instagram(request: Request) -> dict[str, Any]:
 
 @app.post("/api/publish/youtube")
 async def publish_youtube(request: Request) -> dict[str, Any]:
+    user = _require_user(request)
+    uid = user["sub"]
     body = await request.json()
     filename: str = body.get("filename", "")
     title: str = body.get("title", "My Reel")
     description: str = body.get("description", "")
-    privacy: str = body.get("privacy", "public")  # public | unlisted | private
+    privacy: str = body.get("privacy", "public")
 
-    if not YT_TOKEN_FILE.exists():
+    yt_tok = user_yt_token(uid)
+    if not yt_tok.exists():
         raise HTTPException(status_code=400, detail="YouTube not authorized — connect in Settings first")
     if not filename.startswith("reel_") or not filename.endswith(".mp4"):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    path = OUTPUTS_DIR / filename
+    path = user_outputs(uid) / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -1471,7 +1752,7 @@ async def publish_youtube(request: Request) -> dict[str, Any]:
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
 
-    token_data = json.loads(YT_TOKEN_FILE.read_text())
+    token_data = json.loads(yt_tok.read_text())
     creds = Credentials(
         token=token_data["token"],
         refresh_token=token_data["refresh_token"],
@@ -1483,7 +1764,7 @@ async def publish_youtube(request: Request) -> dict[str, Any]:
     if creds.expired and creds.refresh_token:
         creds.refresh(GRequest())
         token_data["token"] = creds.token
-        YT_TOKEN_FILE.write_text(json.dumps(token_data))
+        yt_tok.write_text(json.dumps(token_data))
 
     def _upload() -> dict[str, Any]:
         youtube = build("youtube", "v3", credentials=creds)
@@ -1593,8 +1874,19 @@ SETTINGS_HTML = r"""<!DOCTYPE html>
     <a href="/">Render</a>
     <a href="/library">Library</a>
     <a href="/settings" class="active">Settings</a>
+    <a href="/auth/logout" id="nav-user" style="display:flex;align-items:center;gap:6px;">
+      <img id="nav-avatar" src="" width="22" height="22" style="border-radius:50%;display:none"/>
+      <span id="nav-name"></span> · Sign out
+    </a>
   </nav>
 </header>
+<script>
+fetch('/api/me').then(r=>r.json()).then(u=>{
+  document.getElementById('nav-name').textContent = u.name.split(' ')[0];
+  const img = document.getElementById('nav-avatar');
+  if(u.picture){img.src=u.picture;img.style.display='';}
+}).catch(()=>{});
+</script>
 
 <div class="page">
   <h1>Settings</h1>
@@ -1737,7 +2029,8 @@ loadSettings();
 
 
 @app.get("/settings", response_class=HTMLResponse)
-async def settings_page() -> HTMLResponse:
+async def settings_page(request: Request) -> HTMLResponse:
+    _require_user_page(request)
     return HTMLResponse(SETTINGS_HTML)
 
 
@@ -1747,14 +2040,17 @@ async def settings_page() -> HTMLResponse:
 
 
 @app.get("/api/library")
-async def list_library() -> list[dict[str, Any]]:
-    """Return metadata for every completed reel in the output directory."""
-    import time as _time
+async def list_library(request: Request) -> list[dict[str, Any]]:
+    """Return metadata for every completed reel for the current user."""
+    user = _require_user(request)
+    uid = user["sub"]
+    out_dir = user_outputs(uid)
+    if not out_dir.exists():
+        return []
 
     reels = []
-    for p in sorted(OUTPUTS_DIR.glob("reel_*.mp4"), key=lambda f: f.stat().st_mtime, reverse=True):
+    for p in sorted(out_dir.glob("reel_*.mp4"), key=lambda f: f.stat().st_mtime, reverse=True):
         stat = p.stat()
-        # Try to match to an in-memory job for extra metadata
         job_meta: dict[str, Any] = {}
         short = p.stem.replace("reel_", "")
         with _job_lock:
@@ -1775,7 +2071,8 @@ async def list_library() -> list[dict[str, Any]]:
 
 
 @app.get("/library", response_class=HTMLResponse)
-async def library_page() -> HTMLResponse:
+async def library_page(request: Request) -> HTMLResponse:
+    _require_user_page(request)
     return HTMLResponse(LIBRARY_HTML)
 
 
@@ -1949,8 +2246,19 @@ LIBRARY_HTML = r"""<!DOCTYPE html>
     <a href="/">Render</a>
     <a href="/library" class="active">Library</a>
     <a href="/settings">Settings</a>
+    <a href="/auth/logout" id="nav-user" style="display:flex;align-items:center;gap:6px;">
+      <img id="nav-avatar" src="" width="22" height="22" style="border-radius:50%;display:none"/>
+      <span id="nav-name"></span> · Sign out
+    </a>
   </nav>
 </header>
+<script>
+fetch('/api/me').then(r=>r.json()).then(u=>{
+  document.getElementById('nav-name').textContent = u.name.split(' ')[0];
+  const img = document.getElementById('nav-avatar');
+  if(u.picture){img.src=u.picture;img.style.display='';}
+}).catch(()=>{});
+</script>
 
 <div class="page">
   <div class="page-title">Library <span class="badge" id="count">0</span></div>
