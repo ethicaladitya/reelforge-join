@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Support — ReelForge</title>
+  <meta name="description" content="Get help with ReelForge — FAQs, troubleshooting, and contact information." />
+  <link rel="canonical" href="https://reelforge.adityashah.blog/support.html" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0a0a0f; --surface: #111118; --border: #1e1e2e;
+      --accent: #FFD400; --text: #e8e8f0; --muted: #8888a8;
+    }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.7; }
+    nav { display: flex; align-items: center; justify-content: space-between; padding: 1rem 2rem; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); z-index: 100; }
+    .logo { font-size: 1.3rem; font-weight: 800; color: var(--text); text-decoration: none; }
+    .logo span { color: var(--accent); }
+    nav a { color: var(--muted); text-decoration: none; font-size: 0.9rem; }
+    nav a:hover { color: var(--text); }
+    .container { max-width: 800px; margin: 0 auto; padding: 3rem 2rem 6rem; }
+    h1 { font-size: 2.2rem; font-weight: 800; margin-bottom: 0.75rem; }
+    .subtitle { color: var(--muted); font-size: 1.1rem; margin-bottom: 3rem; }
+    h2 { font-size: 1.2rem; font-weight: 700; color: var(--accent); margin: 2.5rem 0 0.75rem; }
+    h3 { font-size: 1rem; font-weight: 600; color: var(--text); margin: 1.5rem 0 0.5rem; }
+    p { color: #c0c0d8; margin-bottom: 1rem; }
+    ul { color: #c0c0d8; padding-left: 1.5rem; margin-bottom: 1rem; }
+    li { margin-bottom: 0.4rem; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .contact-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; margin-top: 1.5rem; }
+    .contact-card h3 { margin-top: 0; font-size: 1.1rem; }
+    .contact-card p { margin-bottom: 0.5rem; }
+    .btn { display: inline-block; background: var(--accent); color: #0a0a0f; font-weight: 700; padding: 0.75rem 1.5rem; border-radius: 8px; text-decoration: none; margin-top: 1rem; }
+    .btn:hover { opacity: 0.9; text-decoration: none; }
+    .faq-item { border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem 1.5rem; margin-bottom: 0.75rem; }
+    .faq-item h3 { margin-top: 0; color: var(--text); }
+    .faq-item p { margin-bottom: 0; }
+    footer { border-top: 1px solid var(--border); padding: 2rem; text-align: center; color: var(--muted); font-size: 0.85rem; }
+    footer a { color: var(--muted); text-decoration: none; margin: 0 0.75rem; }
+    footer a:hover { color: var(--text); }
+    code { background: #1a1a2e; padding: 0.15rem 0.4rem; border-radius: 4px; font-family: monospace; font-size: 0.9em; color: var(--accent); }
+  </style>
+</head>
+<body>
+  <nav>
+    <a href="/" class="logo">Reel<span>Forge</span></a>
+    <a href="/">← Back to home</a>
+  </nav>
+
+  <div class="container">
+    <h1>Support</h1>
+    <p class="subtitle">Need help with ReelForge? Find answers below or reach out directly.</p>
+
+    <h2>Contact Us</h2>
+    <div class="contact-card">
+      <h3>Email Support</h3>
+      <p>For questions, bug reports, account issues, or data deletion requests:</p>
+      <p><strong>Email:</strong> <a href="mailto:hi@adityashah.dev">hi@adityashah.dev</a></p>
+      <p>We aim to respond within 2–3 business days.</p>
+      <a href="mailto:hi@adityashah.dev" class="btn">Send Email →</a>
+    </div>
+
+    <h2>Frequently Asked Questions</h2>
+
+    <div class="faq-item">
+      <h3>How do I connect my Instagram account?</h3>
+      <p>Go to <strong>Settings</strong> in the app and click "Connect Instagram". You'll be redirected to Facebook to authorize ReelForge. Instagram publishing requires an <strong>Instagram Professional account</strong> (Creator or Business) linked to a Facebook Page. Personal Instagram accounts are not supported by the Instagram API.</p>
+    </div>
+
+    <div class="faq-item">
+      <h3>How do I connect my YouTube channel?</h3>
+      <p>Go to <strong>Settings</strong> and click "Connect YouTube". You'll be asked to sign in with Google and grant permission to upload videos. ReelForge uses the same Google account you logged in with — no separate credentials needed.</p>
+    </div>
+
+    <div class="faq-item">
+      <h3>My video isn't playing in the Library. What do I do?</h3>
+      <p>Make sure you're accessing ReelForge via HTTPS (e.g., <code>https://reeleditor.ariham.com</code>). Video playback requires HTTP Range request support, which is included in ReelForge's server. If using a reverse proxy or tunnel, ensure the proxy forwards <code>Range</code> headers.</p>
+    </div>
+
+    <div class="faq-item">
+      <h3>Can I use ReelForge on mobile?</h3>
+      <p>Yes — the web interface is mobile-responsive. You can upload clips, view your library, and publish from a mobile browser. However, for the best experience when uploading large video files, a desktop browser is recommended.</p>
+    </div>
+
+    <div class="faq-item">
+      <h3>How do I delete my account and data?</h3>
+      <p>Email us at <a href="mailto:hi@adityashah.dev">hi@adityashah.dev</a> with the subject "Delete My Account" and include the email address associated with your Google account. We will delete all your stored videos, settings, and tokens within 7 days and confirm via email.</p>
+    </div>
+
+    <div class="faq-item">
+      <h3>Why does Instagram publishing require a Facebook Page?</h3>
+      <p>This is a requirement from Meta's Instagram Graph API. The API only supports Instagram Professional accounts (Creator or Business), which must be linked to a Facebook Page. Personal Instagram accounts cannot publish via the API.</p>
+    </div>
+
+    <div class="faq-item">
+      <h3>My Instagram token expired. What do I do?</h3>
+      <p>Instagram access tokens expire after approximately 60 days. If publishing fails, go to <strong>Settings</strong>, disconnect Instagram, and reconnect it to get a fresh token.</p>
+    </div>
+
+    <div class="faq-item">
+      <h3>Can I publish to both Instagram and YouTube at the same time?</h3>
+      <p>Yes. In the Library, click the publish button on any reel and toggle on both Instagram and YouTube before clicking "Publish". ReelForge will upload to both platforms sequentially.</p>
+    </div>
+
+    <div class="faq-item">
+      <h3>What video formats are supported for upload?</h3>
+      <p>ReelForge accepts most common video formats (MP4, MOV, MKV, AVI, WebM). All clips are processed with FFmpeg and output as H.264 MP4 in 9:16 vertical format optimized for Instagram Reels and YouTube Shorts.</p>
+    </div>
+
+    <div class="faq-item">
+      <h3>Is my data shared with anyone?</h3>
+      <p>No. Your videos are processed on the ReelForge server and never sent to any third-party cloud service. OAuth tokens are stored securely per-user and used only when you initiate a publish action. See our <a href="/privacy.html">Privacy Policy</a> for full details.</p>
+    </div>
+
+    <h2>Still Need Help?</h2>
+    <p>If your question isn't answered above, reach out directly:</p>
+    <p><a href="mailto:hi@adityashah.dev" class="btn">Email Support →</a></p>
+  </div>
+
+  <footer>
+    <p>
+      <a href="/">Home</a>
+      <a href="/privacy.html">Privacy Policy</a>
+      <a href="/terms.html">Terms of Service</a>
+      <a href="/support.html">Support</a>
+    </p>
+    <p style="margin-top: 1rem;">© 2025 ReelForge. All rights reserved.</p>
+  </footer>
+</body>
+</html>

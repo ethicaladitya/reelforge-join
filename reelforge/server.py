@@ -198,7 +198,7 @@ GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 FACEBOOK_APP_ID = os.environ.get("FACEBOOK_APP_ID", "")
 FACEBOOK_APP_SECRET = os.environ.get("FACEBOOK_APP_SECRET", "")
 # PUBLIC_URL must be set when running behind a reverse proxy / tunnel
-# e.g. PUBLIC_URL=https://reel.adityashah.blog
+# e.g. PUBLIC_URL=https://reeleditor.ariham.com
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 _GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
