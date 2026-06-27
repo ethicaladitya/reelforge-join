@@ -7,6 +7,13 @@ import time
 from pathlib import Path
 
 import click
+
+# Load .env from project root automatically (no-op if file doesn't exist)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass
 from rich.panel import Panel
 
 from . import __version__

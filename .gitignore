@@ -26,3 +26,8 @@ output/
 
 # macOS
 .DS_Store
+
+# Environment / secrets
+.env
+.pids/
+.logs/
