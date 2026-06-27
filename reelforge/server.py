@@ -1978,7 +1978,7 @@ SETTINGS_HTML = r"""<!DOCTYPE html>
     <a href="/settings" class="active">Settings</a>
     <a href="/auth/logout" id="nav-user">
       <img id="nav-avatar" src="" width="22" height="22" style="border-radius:50%;display:none"/>
-      <span id="nav-name"></span> \xb7 Sign out
+      <span id="nav-name"></span> &middot; Sign out
     </a>
   </nav>
 </header>
