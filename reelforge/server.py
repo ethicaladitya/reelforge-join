@@ -194,9 +194,17 @@ USERS_DIR = BASE_DIR / "output" / "users"  # per-user data root
 # Google OAuth config — read from env or fall back to stored config
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+# PUBLIC_URL must be set when running behind a reverse proxy / tunnel
+# e.g. PUBLIC_URL=https://reel.adityashah.blog
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 _GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 _GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+
+
+def _app_base(request: Request) -> str:
+    """Return the public base URL, falling back to request.base_url."""
+    return PUBLIC_URL if PUBLIC_URL else str(request.base_url).rstrip("/")
 
 # Session secret — persist across restarts
 _SECRET_FILE = BASE_DIR / "output" / "_secret.key"
@@ -1241,7 +1249,7 @@ async def google_login(request: Request) -> RedirectResponse:
     next_url = request.query_params.get("next", "/")
     state = secrets.token_urlsafe(16) + "|" + next_url
     request.session["oauth_state"] = state
-    redirect_uri = str(request.base_url).rstrip("/") + "/auth/google/callback"
+    redirect_uri = _app_base(request) + "/auth/google/callback"
     params = {
         "client_id": GOOGLE_CLIENT_ID,
         "redirect_uri": redirect_uri,
@@ -1267,7 +1275,7 @@ async def google_callback(request: Request) -> RedirectResponse:
     if not code:
         raise HTTPException(status_code=400, detail="Missing auth code")
 
-    redirect_uri = str(request.base_url).rstrip("/") + "/auth/google/callback"
+    redirect_uri = _app_base(request) + "/auth/google/callback"
 
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(_GOOGLE_TOKEN_URL, data={
@@ -1612,7 +1620,7 @@ async def youtube_auth_start(request: Request) -> RedirectResponse:
     if not user_yt_creds(uid).exists():
         raise HTTPException(status_code=400, detail="Upload YouTube credentials first")
     from google_auth_oauthlib.flow import Flow
-    redirect_uri = str(request.base_url).rstrip("/") + "/api/auth/youtube/callback"
+    redirect_uri = _app_base(request) + "/api/auth/youtube/callback"
     flow = Flow.from_client_secrets_file(
         str(user_yt_creds(uid)),
         scopes=["https://www.googleapis.com/auth/youtube.upload"],
@@ -1630,7 +1638,7 @@ async def youtube_auth_callback(request: Request) -> HTMLResponse:
     if not creds_file or not creds_file.exists():
         raise HTTPException(status_code=400, detail="Credentials missing")
     from google_auth_oauthlib.flow import Flow
-    redirect_uri = str(request.base_url).rstrip("/") + "/api/auth/youtube/callback"
+    redirect_uri = _app_base(request) + "/api/auth/youtube/callback"
     flow = Flow.from_client_secrets_file(
         str(creds_file),
         scopes=["https://www.googleapis.com/auth/youtube.upload"],
