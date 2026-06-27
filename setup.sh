@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ReelForge — setup, deploy, and management script
+# Reel Editor — setup, deploy, and management script
 #
 # LOCAL (macOS):
 #   ./setup.sh              → first-time local setup
@@ -82,9 +82,11 @@ cmd_deploy() {
   systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null && IS_UPDATE=true
 
   if $IS_UPDATE; then
-    echo -e "\n${BOLD}ReelForge Update${RESET}  (existing install detected)"
+    echo -e "
+${BOLD}Reel Editor Update${RESET}  (existing install detected)"
   else
-    echo -e "\n${BOLD}ReelForge Server Deploy${RESET}"
+    echo -e "
+${BOLD}Reel Editor Server Deploy${RESET}"
   fi
   info "Domain:  $DEPLOY_DOMAIN"
   info "App dir: $APP_DIR"
@@ -170,7 +172,7 @@ cmd_deploy() {
   SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
   cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=ReelForge Video Tool
+Description=Reel Editor Video Tool
 After=network.target
 
 [Service]
@@ -339,7 +341,7 @@ NGINXEOF
 # LOCAL SETUP  (macOS)
 # ─────────────────────────────────────────────────────────────────────────────
 cmd_setup() {
-  header "ReelForge Local Setup"
+  header "Reel Editor Local Setup"
 
   if ! command -v uv &>/dev/null; then
     error "uv not found. Install: curl -LsSf https://astral.sh/uv/install.sh | sh"
@@ -396,7 +398,7 @@ cmd_start() {
   [[ ${#MISSING[@]} -gt 0 ]] && { error "Missing in .env: ${MISSING[*]}"; exit 1; }
 
   HOST="${HOST:-127.0.0.1}"; PORT="${PORT:-7433}"; CF_TUNNEL="${CF_TUNNEL_NAME:-}"
-  header "Starting ReelForge"; cmd_stop_silent
+  header "Starting Reel Editor"; cmd_stop_silent
 
   info "Server on $HOST:$PORT..."
   cd "$SCRIPT_DIR"
@@ -433,7 +435,7 @@ cmd_stop_silent() {
 }
 
 cmd_stop() {
-  header "Stopping ReelForge"; load_env
+  header "Stopping Reel Editor"; load_env
   for name in server cloudflared; do
     f="$PID_DIR/$name.pid"
     if [[ -f "$f" ]]; then
@@ -449,7 +451,7 @@ cmd_stop() {
 
 cmd_status() {
   load_env; HOST="${HOST:-127.0.0.1}"; PORT="${PORT:-7433}"
-  header "ReelForge Status"
+  header "Reel Editor Status"
 
   if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
     success "Server running (systemd: $SERVICE_NAME)"

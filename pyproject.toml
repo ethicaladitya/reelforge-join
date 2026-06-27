@@ -5,7 +5,7 @@ description = "Automatically convert AI-generated talking-head clips into polish
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
-authors = [{ name = "ReelForge" }]
+authors = [{ name = "Ariham Technologies" }]
 
 dependencies = [
     "faster-whisper>=1.0.3",

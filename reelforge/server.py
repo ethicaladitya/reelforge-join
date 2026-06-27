@@ -306,7 +306,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     yield
 
 
-app = FastAPI(title="ReelForge", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Reel Editor", version="0.1.0", lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=_get_session_secret(), max_age=30 * 24 * 3600)
 
 
@@ -332,7 +332,7 @@ UI_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>ReelForge</title>
+<title>Reel Editor</title>
 <style>
   :root {
     --bg: #0f0f13;
@@ -1187,7 +1187,7 @@ LOGIN_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>ReelForge — Sign in</title>
+<title>Reel Editor — Sign in</title>
 <style>
   :root { --bg:#0f0f13; --surface:#1a1a23; --accent:#FFD400; --text:#f0f0f5; --muted:#7a7a90; --border:#2e2e3e; --radius:12px; }
   * { box-sizing:border-box; margin:0; padding:0; }
@@ -1926,7 +1926,7 @@ SETTINGS_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>ReelForge — Settings</title>
+<title>Reel Editor — Settings</title>
 <style>
   :root {
     --bg:#0f0f13; --surface:#1a1a23; --surface2:#23232f;
@@ -1995,7 +1995,7 @@ SETTINGS_HTML = r"""<!DOCTYPE html>
 
   <div class="section">
     <div class="section-title">▶ YouTube</div>
-    <div class="section-sub">Uses the same Google account as your ReelForge login.</div>
+    <div class="section-sub">Uses the same Google account as your Reel Editor login.</div>
     <div id="yt-section">Loading…</div>
   </div>
 </div>
@@ -2095,7 +2095,7 @@ LIBRARY_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>ReelForge — Library</title>
+<title>Reel Editor — Library</title>
 <style>
   :root {
     --bg: #0f0f13; --surface: #1a1a23; --surface2: #23232f;
