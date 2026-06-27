@@ -22,7 +22,7 @@ ENV_FILE="$SCRIPT_DIR/.env"
 PID_DIR="$SCRIPT_DIR/.pids"
 LOG_DIR="$SCRIPT_DIR/.logs"
 SERVICE_NAME="reelforge"
-DEFAULT_APP_DIR="/opt/reelforge"
+DEFAULT_APP_DIR="/var/www/html/reeleditor"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -295,11 +295,14 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
         proxy_set_header Range \$http_range;
         proxy_set_header If-Range \$http_if_range;
         proxy_pass_header Content-Range;
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;
+        proxy_connect_timeout 60s;
     }
 }
 NGINXEOF

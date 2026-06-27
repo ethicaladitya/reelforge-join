@@ -967,21 +967,48 @@ async function startRender() {
   }
 }
 
+function uploadWithProgress(url, formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(e.loaded / e.total);
+      }
+    };
+    xhr.onload = () => {
+      try {
+        const d = JSON.parse(xhr.responseText);
+        if (xhr.status >= 200 && xhr.status < 300) resolve(d);
+        else reject(new Error(d.detail || `Upload failed (${xhr.status})`));
+      } catch { reject(new Error(`Upload failed (${xhr.status})`)); }
+    };
+    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.ontimeout = () => reject(new Error('Upload timed out'));
+    xhr.timeout = 600000; // 10 min
+    xhr.send(formData);
+  });
+}
+
 async function uploadClips() {
   // New session for each render so clips never bleed across jobs
   sessionId = crypto.randomUUID();
   const names = [];
   for (let i = 0; i < clips.length; i++) {
     const c = clips[i];
-    setProgress(Math.round((i / clips.length) * 10), `Uploading ${c.name}…`);
 
     const fd = new FormData();
-    fd.append('file', c.file, c.name);        // keep original name
-    fd.append('session_id', sessionId);        // scoped to this render
-    const r = await fetch('/api/upload/clip', { method: 'POST', body: fd });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.detail);
-    names.push(d.filename);                    // names in user-specified order
+    fd.append('file', c.file, c.name);
+    fd.append('session_id', sessionId);
+
+    const d = await uploadWithProgress('/api/upload/clip', fd, (frac) => {
+      // each clip gets an equal slice of the 0-10% band
+      const base = (i / clips.length) * 10;
+      const slice = (1 / clips.length) * 10;
+      const pct = Math.round(base + slice * frac);
+      setProgress(pct, `Uploading ${c.name}… ${Math.round(frac * 100)}%`);
+    });
+    names.push(d.filename);
   }
   return names;
 }
@@ -990,9 +1017,9 @@ async function uploadMusic() {
   const fd = new FormData();
   fd.append('file', musicFile, musicFile.name);
   fd.append('session_id', sessionId);
-  const r = await fetch('/api/upload/music', { method: 'POST', body: fd });
-  const d = await r.json();
-  if (!r.ok) throw new Error(d.detail);
+  const d = await uploadWithProgress('/api/upload/music', fd, (frac) => {
+    setProgress(10, `Uploading music… ${Math.round(frac * 100)}%`);
+  });
   return d.filename;
 }
 
@@ -1677,7 +1704,7 @@ async def youtube_revoke(request: Request) -> dict[str, str]:
 # Instagram OAuth (via Facebook Login)
 # ---------------------------------------------------------------------------
 
-_IG_SCOPES = "instagram_basic,instagram_content_publish,pages_read_engagement,pages_show_list"
+_IG_SCOPES = "instagram_business_basic,instagram_business_content_publish,instagram_business_manage_comments,pages_show_list"
 
 
 @app.get("/api/auth/instagram")
@@ -1704,7 +1731,7 @@ async def instagram_auth_callback(request: Request) -> HTMLResponse:
     if not uid or not code:
         raise HTTPException(status_code=400, detail="Missing state or code")
     redirect_uri = _app_base(request) + "/api/auth/instagram/callback"
-    base = "https://graph.facebook.com/v19.0"
+    base = "https://graph.facebook.com/v21.0"
 
     async with httpx.AsyncClient(timeout=30) as client:
         # Exchange code for short-lived token
@@ -1765,6 +1792,82 @@ async def instagram_auth_callback(request: Request) -> HTMLResponse:
                         f"<p>Instagram connected (@{ig_username}). You can close this tab.</p>")
 
 
+@app.post("/api/auth/instagram/manual")
+async def instagram_manual_token(request: Request) -> dict[str, Any]:
+    """Accept a manually-generated Instagram API token from developers.facebook.com."""
+    user = _require_user(request)
+    uid = user["sub"]
+    body = await request.json()
+    access_token = body.get("access_token", "").strip()
+    ig_user_id = body.get("ig_user_id", "").strip()
+
+    if not access_token:
+        raise HTTPException(status_code=400, detail="access_token is required")
+
+    base = "https://graph.facebook.com/v21.0"
+    ig_username = ""
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        if not ig_user_id:
+            # Try to discover the IG user ID from the token
+            # First try: direct /me call (works for IG Business tokens)
+            me_r = await client.get(f"{base}/me", params={
+                "fields": "id,username,name,account_type",
+                "access_token": access_token,
+            })
+            if me_r.status_code == 200:
+                me_data = me_r.json()
+                # If this is an Instagram-scoped token, it returns the IG user directly
+                if me_data.get("username"):
+                    ig_user_id = me_data["id"]
+                    ig_username = me_data.get("username", ig_user_id)
+
+            if not ig_user_id:
+                # Fallback: look through Facebook pages for linked IG account
+                pages_r = await client.get(f"{base}/me/accounts", params={
+                    "fields": "instagram_business_account,name",
+                    "access_token": access_token,
+                })
+                if pages_r.status_code == 200:
+                    for page in pages_r.json().get("data", []):
+                        iba = page.get("instagram_business_account", {})
+                        if iba.get("id"):
+                            ig_user_id = iba["id"]
+                            ig_r = await client.get(f"{base}/{ig_user_id}", params={
+                                "fields": "username",
+                                "access_token": access_token,
+                            })
+                            if ig_r.status_code == 200:
+                                ig_username = ig_r.json().get("username", ig_user_id)
+                            break
+
+        if not ig_user_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not find an Instagram Business account with this token. "
+                       "Please also provide ig_user_id, or ensure the token has the right permissions.",
+            )
+
+        # If we have ig_user_id but not username yet, fetch it
+        if not ig_username:
+            ig_r = await client.get(f"{base}/{ig_user_id}", params={
+                "fields": "username",
+                "access_token": access_token,
+            })
+            if ig_r.status_code == 200:
+                ig_username = ig_r.json().get("username", ig_user_id)
+            else:
+                ig_username = ig_user_id
+
+    _ensure_user_dirs(uid)
+    s = _load_settings(uid)
+    s["ig_access_token"] = access_token
+    s["ig_user_id"] = ig_user_id
+    s["ig_username"] = ig_username
+    _save_settings(uid, s)
+    return {"status": "connected", "ig_username": ig_username, "ig_user_id": ig_user_id}
+
+
 @app.delete("/api/auth/instagram")
 async def instagram_revoke(request: Request) -> dict[str, str]:
     user = _require_user(request)
@@ -1804,7 +1907,7 @@ async def publish_instagram(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="File not found")
 
     video_url = f"{public_base}/api/output/{filename}"
-    base = "https://graph.facebook.com/v19.0"
+    base = "https://graph.facebook.com/v21.0"
 
     async with httpx.AsyncClient(timeout=60) as client:
         # Step 1: create container
@@ -1985,7 +2088,7 @@ SETTINGS_HTML = r"""<!DOCTYPE html>
 
 <div class="page">
   <h1>Settings</h1>
-  <div class="page-sub">Connect your social accounts — one click, no manual tokens.</div>
+  <div class="page-sub">Connect your social accounts — via OAuth or manual token.</div>
 
   <div class="section">
     <div class="section-title">📸 Instagram</div>
@@ -2017,13 +2120,53 @@ async function loadSettings() {
 }
 function renderIG(s) {
   const el = document.getElementById('ig-section');
-  if (!s.ig_available) {
-    el.innerHTML = '<div class="unavail">Instagram OAuth not configured.<br/><code>FACEBOOK_APP_ID</code> and <code>FACEBOOK_APP_SECRET</code> env vars needed on the server.</div>';
+  if (s.ig_connected) {
+    el.innerHTML = `<div class="connected-row"><span class="tag">✓ @${s.ig_username}</span><button class="btn btn-danger" onclick="disconnect('instagram')">Disconnect</button></div>`;
     return;
   }
-  el.innerHTML = s.ig_connected
-    ? `<div class="connected-row"><span class="tag">✓ @${s.ig_username}</span><button class="btn btn-danger" onclick="disconnect('instagram')">Disconnect</button></div>`
-    : '<button class="btn btn-primary connect-btn" onclick="connect(\'instagram\')"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg> Connect Instagram</button>';
+  let html = '';
+  if (s.ig_available) {
+    html += '<button class="btn btn-primary connect-btn" onclick="connect(\'instagram\')"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg> Connect Instagram</button>';
+    html += '<div style="text-align:center;color:var(--muted);font-size:12px;margin:12px 0 8px">— or paste a token from developers.facebook.com —</div>';
+  }
+  html += `<div style="display:flex;flex-direction:column;gap:10px">
+    <input id="ig-token" type="text" placeholder="Access token from developers.facebook.com"
+      style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px;font-family:monospace;outline:none;" />
+    <input id="ig-userid" type="text" placeholder="Instagram User ID (optional — auto-detected from token)"
+      style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px;font-family:monospace;outline:none;" />
+    <button class="btn btn-primary connect-btn" onclick="saveManualIG()" id="ig-save-btn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>
+      Save Token
+    </button>
+    <div id="ig-manual-status" style="font-size:13px;min-height:20px;"></div>
+  </div>`;
+  el.innerHTML = html;
+}
+async function saveManualIG() {
+  const token = document.getElementById('ig-token').value.trim();
+  const userId = document.getElementById('ig-userid').value.trim();
+  const status = document.getElementById('ig-manual-status');
+  const btn = document.getElementById('ig-save-btn');
+  if (!token) { status.innerHTML = '<span style="color:var(--error)">Please paste an access token.</span>'; return; }
+  btn.disabled = true; btn.style.opacity = '0.5';
+  status.innerHTML = '<span style="color:var(--muted)">Verifying token…</span>';
+  try {
+    const r = await fetch('/api/auth/instagram/manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ access_token: token, ig_user_id: userId }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      status.innerHTML = `<span style="color:var(--success)">✓ Connected @${d.ig_username}</span>`;
+      setTimeout(loadSettings, 1000);
+    } else {
+      status.innerHTML = `<span style="color:var(--error)">${d.detail || 'Failed to connect'}</span>`;
+    }
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--error)">Error: ${e.message}</span>`;
+  }
+  btn.disabled = false; btn.style.opacity = '1';
 }
 function renderYT(s) {
   const el = document.getElementById('yt-section');
