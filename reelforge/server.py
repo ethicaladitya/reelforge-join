@@ -2080,6 +2080,14 @@ async def list_library(request: Request) -> list[dict[str, Any]]:
     return reels
 
 
+@app.get("/editor")
+async def editor_entry(request: Request) -> RedirectResponse:
+    """Entry point for the 'Launch App' button — goes to library if logged in, else login."""
+    if request.session.get("user"):
+        return RedirectResponse("/library")
+    return RedirectResponse("/auth/login?next=/library")
+
+
 @app.get("/library", response_class=HTMLResponse)
 async def library_page(request: Request) -> HTMLResponse:
     _require_user_page(request)
