@@ -608,7 +608,7 @@ UI_HTML = r"""<!DOCTYPE html>
   <div class="logo">Reel<span>Forge</span></div>
   <div class="tagline">AI clips → polished vertical reels</div>
   <nav>
-    <a href="/" style="color:var(--accent);border-color:var(--accent);">Render</a>
+    <a href="/render" style="color:var(--accent);border-color:var(--accent);">Render</a>
     <a href="/library">Library</a>
     <a href="/settings">Settings</a>
     <a href="/auth/logout" id="nav-user" title="Sign out" style="display:flex;align-items:center;gap:6px;">
@@ -1172,8 +1172,8 @@ function resetUI() {
 """
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request) -> HTMLResponse:
+@app.get("/render", response_class=HTMLResponse)
+async def render_page(request: Request) -> HTMLResponse:
     _require_user_page(request)
     return HTMLResponse(UI_HTML)
 
@@ -1251,7 +1251,7 @@ async def login_page(request: Request) -> HTMLResponse:
 async def google_login(request: Request) -> RedirectResponse:
     if not _google_configured():
         raise HTTPException(status_code=503, detail="Google OAuth not configured")
-    next_url = request.query_params.get("next", "/library")
+    next_url = request.query_params.get("next", "/render")
     state = secrets.token_urlsafe(16) + "|" + next_url
     request.session["oauth_state"] = state
     redirect_uri = _app_base(request) + "/auth/google/callback"
@@ -1272,11 +1272,11 @@ async def google_login(request: Request) -> RedirectResponse:
 async def google_callback(request: Request) -> RedirectResponse:
     state = request.query_params.get("state", "")
     saved_state = request.session.pop("oauth_state", "")
-    next_url = "/library"
+    next_url = "/render"
     if "|" in state:
         _, next_url = state.split("|", 1)
-        if next_url == "/":
-            next_url = "/library"
+        if next_url in ("/", "/library"):
+            next_url = "/render"
 
     code = request.query_params.get("code")
     if not code:
@@ -1973,7 +1973,7 @@ SETTINGS_HTML = r"""<!DOCTYPE html>
 <header>
   <div class="logo">Reel<span>Forge</span></div>
   <nav>
-    <a href="/">Render</a>
+    <a href="/render">Render</a>
     <a href="/library">Library</a>
     <a href="/settings" class="active">Settings</a>
     <a href="/auth/logout" id="nav-user">
@@ -2082,10 +2082,9 @@ async def list_library(request: Request) -> list[dict[str, Any]]:
 
 @app.get("/editor")
 async def editor_entry(request: Request) -> RedirectResponse:
-    """Entry point for the 'Launch App' button — goes to library if logged in, else login."""
     if request.session.get("user"):
-        return RedirectResponse("/library")
-    return RedirectResponse("/auth/login?next=/library")
+        return RedirectResponse("/render")
+    return RedirectResponse("/auth/login?next=/render")
 
 
 @app.get("/library", response_class=HTMLResponse)
@@ -2261,7 +2260,7 @@ LIBRARY_HTML = r"""<!DOCTYPE html>
 <header>
   <div class="logo">Reel<span>Forge</span></div>
   <nav>
-    <a href="/">Render</a>
+    <a href="/render">Render</a>
     <a href="/library" class="active">Library</a>
     <a href="/settings">Settings</a>
     <a href="/auth/logout" id="nav-user" style="display:flex;align-items:center;gap:6px;">
@@ -2347,7 +2346,7 @@ async function loadLibrary() {
   document.getElementById('count').textContent = reels.length;
 
   if (reels.length === 0) {
-    grid.innerHTML = '<div class="empty">No reels yet. <a href="/">Render your first one →</a></div>';
+    grid.innerHTML = '<div class="empty">No reels yet. <a href="/render">Render your first one →</a></div>';
     return;
   }
 
@@ -2420,7 +2419,7 @@ function updateCount() {
   const n = document.querySelectorAll('.reel-card').length;
   document.getElementById('count').textContent = n;
   if (n === 0) document.getElementById('grid').innerHTML =
-    '<div class="empty">No reels yet. <a href="/">Render your first one →</a></div>';
+    '<div class="empty">No reels yet. <a href="/render">Render your first one →</a></div>';
 }
 
 // ---- Publish modal ----
