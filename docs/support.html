@@ -5,127 +5,211 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Support — ReelForge</title>
   <meta name="description" content="Get help with ReelForge — FAQs, troubleshooting, and contact information." />
-  <link rel="canonical" href="https://reelforge.adityashah.blog/support.html" />
+  <link rel="canonical" href="https://reeleditor.ariham.com/support.html" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --bg: #0a0a0f; --surface: #111118; --border: #1e1e2e;
-      --accent: #FFD400; --text: #e8e8f0; --muted: #8888a8;
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+      background: #F7F7F9; color: #111118; line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
     }
-    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.7; }
-    nav { display: flex; align-items: center; justify-content: space-between; padding: 1rem 2rem; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); z-index: 100; }
-    .logo { font-size: 1.3rem; font-weight: 800; color: var(--text); text-decoration: none; }
-    .logo span { color: var(--accent); }
-    nav a { color: var(--muted); text-decoration: none; font-size: 0.9rem; }
-    nav a:hover { color: var(--text); }
-    .container { max-width: 800px; margin: 0 auto; padding: 3rem 2rem 6rem; }
-    h1 { font-size: 2.2rem; font-weight: 800; margin-bottom: 0.75rem; }
-    .subtitle { color: var(--muted); font-size: 1.1rem; margin-bottom: 3rem; }
-    h2 { font-size: 1.2rem; font-weight: 700; color: var(--accent); margin: 2.5rem 0 0.75rem; }
-    h3 { font-size: 1rem; font-weight: 600; color: var(--text); margin: 1.5rem 0 0.5rem; }
-    p { color: #c0c0d8; margin-bottom: 1rem; }
-    ul { color: #c0c0d8; padding-left: 1.5rem; margin-bottom: 1rem; }
-    li { margin-bottom: 0.4rem; }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .contact-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; margin-top: 1.5rem; }
-    .contact-card h3 { margin-top: 0; font-size: 1.1rem; }
-    .contact-card p { margin-bottom: 0.5rem; }
-    .btn { display: inline-block; background: var(--accent); color: #0a0a0f; font-weight: 700; padding: 0.75rem 1.5rem; border-radius: 8px; text-decoration: none; margin-top: 1rem; }
-    .btn:hover { opacity: 0.9; text-decoration: none; }
-    .faq-item { border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem 1.5rem; margin-bottom: 0.75rem; }
-    .faq-item h3 { margin-top: 0; color: var(--text); }
-    .faq-item p { margin-bottom: 0; }
-    footer { border-top: 1px solid var(--border); padding: 2rem; text-align: center; color: var(--muted); font-size: 0.85rem; }
-    footer a { color: var(--muted); text-decoration: none; margin: 0 0.75rem; }
-    footer a:hover { color: var(--text); }
-    code { background: #1a1a2e; padding: 0.15rem 0.4rem; border-radius: 4px; font-family: monospace; font-size: 0.9em; color: var(--accent); }
+    a { color: inherit; text-decoration: none; }
+    :root {
+      --ink: #111118; --ink2: #44445A; --muted: #9090A8;
+      --bg: #F7F7F9; --surface: #FFFFFF; --border: #E4E4EC; --border2: #CACAD8;
+      --blue: #2B5CE6; --blue-dim: rgba(43,92,230,0.07); --blue-glow: rgba(43,92,230,0.18);
+      --radius: 14px;
+      --shadow-sm: 0 1px 3px rgba(0,0,0,0.05); --shadow: 0 4px 16px rgba(0,0,0,0.07);
+    }
+    nav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 36px; height: 60px;
+      background: rgba(247,247,249,0.9); backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100;
+    }
+    .nav-logo { font-size: 18px; font-weight: 800; letter-spacing: -0.4px; color: var(--ink); }
+    .nav-logo span { color: var(--blue); }
+    .nav-back {
+      font-size: 13.5px; font-weight: 500; color: var(--ink2);
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 12px; border-radius: 8px; transition: all 0.15s;
+    }
+    .nav-back:hover { background: var(--blue-dim); color: var(--blue); }
+    .page { max-width: 760px; margin: 0 auto; padding: 56px 36px 80px; }
+    h1 { font-size: 32px; font-weight: 900; letter-spacing: -1px; margin-bottom: 6px; }
+    .page-sub { font-size: 16px; color: var(--ink2); margin-bottom: 48px; }
+    .contact-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+      padding: 28px 32px; display: flex; align-items: center; justify-content: space-between;
+      gap: 24px; box-shadow: var(--shadow-sm); margin-bottom: 48px; flex-wrap: wrap;
+    }
+    .contact-info h2 { font-size: 16px; font-weight: 800; margin-bottom: 4px; }
+    .contact-info p { font-size: 13.5px; color: var(--ink2); }
+    .btn-cta {
+      display: inline-flex; align-items: center; gap: 7px;
+      background: var(--ink); color: #fff; font-size: 13.5px; font-weight: 700;
+      padding: 10px 20px; border-radius: 10px; white-space: nowrap; transition: all 0.15s;
+    }
+    .btn-cta:hover { background: var(--blue); transform: translateY(-1px); }
+    .section-label {
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em;
+      color: var(--blue); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
+    }
+    .section-label::before { content:''; width:16px; height:2px; background:var(--blue); border-radius:2px; display:block; }
+    .faq-list { display: flex; flex-direction: column; gap: 6px; }
+    details {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden; transition: border-color 0.2s;
+    }
+    details[open] { border-color: var(--border2); }
+    summary {
+      font-size: 14.5px; font-weight: 600; color: var(--ink);
+      padding: 17px 20px; cursor: pointer; list-style: none;
+      display: flex; justify-content: space-between; align-items: center; gap: 16px;
+      user-select: none;
+    }
+    summary::-webkit-details-marker { display: none; }
+    .faq-arrow {
+      width: 20px; height: 20px; flex-shrink: 0; border-radius: 50%;
+      background: var(--blue-dim); display: flex; align-items: center; justify-content: center;
+      transition: transform 0.2s;
+    }
+    .faq-arrow svg { width: 12px; height: 12px; color: var(--blue); }
+    details[open] .faq-arrow { transform: rotate(180deg); background: var(--blue); }
+    details[open] .faq-arrow svg { color: #fff; }
+    summary:hover { color: var(--blue); }
+    .faq-body {
+      padding: 16px 20px 20px; border-top: 1px solid var(--border);
+      font-size: 14px; color: var(--ink2); line-height: 1.75;
+    }
+    .faq-body a { color: var(--blue); }
+    .faq-body a:hover { text-decoration: underline; }
+    .faq-body code {
+      background: var(--blue-dim); color: var(--blue);
+      padding: 1px 5px; border-radius: 4px; font-size: 12.5px; font-family: monospace;
+    }
+    .help-box {
+      margin-top: 48px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; padding: 36px; text-align: center; box-shadow: var(--shadow-sm);
+    }
+    .help-box h3 { font-size: 20px; font-weight: 800; margin-bottom: 8px; }
+    .help-box p { font-size: 14px; color: var(--ink2); margin-bottom: 24px; }
+    footer {
+      background: var(--surface); border-top: 1px solid var(--border);
+      padding: 28px 36px; text-align: center; font-size: 12.5px; color: var(--muted);
+    }
+    footer a { color: var(--ink2); margin: 0 10px; transition: color 0.15s; }
+    footer a:hover { color: var(--blue); }
+    .footer-links { margin-bottom: 10px; }
+    @media (max-width: 600px) {
+      nav { padding: 0 20px; }
+      .page { padding: 40px 20px 60px; }
+      .contact-card { flex-direction: column; align-items: flex-start; }
+      footer { padding: 24px 20px; }
+    }
   </style>
 </head>
 <body>
-  <nav>
-    <a href="/" class="logo">Reel<span>Forge</span></a>
-    <a href="/">← Back to home</a>
-  </nav>
 
-  <div class="container">
-    <h1>Support</h1>
-    <p class="subtitle">Need help with ReelForge? Find answers below or reach out directly.</p>
+<nav>
+  <div class="nav-logo">Reel<span>Forge</span></div>
+  <a href="/" class="nav-back">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+    Back to home
+  </a>
+</nav>
 
-    <h2>Contact Us</h2>
-    <div class="contact-card">
-      <h3>Email Support</h3>
-      <p>For questions, bug reports, account issues, or data deletion requests:</p>
-      <p><strong>Email:</strong> <a href="mailto:hello@ariham.com">hello@ariham.com</a></p>
-      <p>We aim to respond within 2–3 business days.</p>
-      <a href="mailto:hello@ariham.com" class="btn">Send Email →</a>
+<div class="page">
+  <h1>Support</h1>
+  <p class="page-sub">Need help with ReelForge? Find answers below or reach out directly.</p>
+
+  <div class="contact-card">
+    <div class="contact-info">
+      <h2>Email Support</h2>
+      <p>Questions, bug reports, account issues, or data deletion requests.</p>
+      <p style="margin-top:5px;font-weight:600;color:var(--ink);">hello@ariham.com &nbsp;&middot;&nbsp; <span style="font-weight:400;color:var(--ink2);">Reply within 2–3 business days</span></p>
     </div>
-
-    <h2>Frequently Asked Questions</h2>
-
-    <div class="faq-item">
-      <h3>How do I connect my Instagram account?</h3>
-      <p>Go to <strong>Settings</strong> in the app and click "Connect Instagram". You'll be redirected to Facebook to authorize ReelForge. Instagram publishing requires an <strong>Instagram Professional account</strong> (Creator or Business) linked to a Facebook Page. Personal Instagram accounts are not supported by the Instagram API.</p>
-    </div>
-
-    <div class="faq-item">
-      <h3>How do I connect my YouTube channel?</h3>
-      <p>Go to <strong>Settings</strong> and click "Connect YouTube". You'll be asked to sign in with Google and grant permission to upload videos. ReelForge uses the same Google account you logged in with — no separate credentials needed.</p>
-    </div>
-
-    <div class="faq-item">
-      <h3>My video isn't playing in the Library. What do I do?</h3>
-      <p>Make sure you're accessing ReelForge via HTTPS (e.g., <code>https://reeleditor.ariham.com</code>). Video playback requires HTTP Range request support, which is included in ReelForge's server. If using a reverse proxy or tunnel, ensure the proxy forwards <code>Range</code> headers.</p>
-    </div>
-
-    <div class="faq-item">
-      <h3>Can I use ReelForge on mobile?</h3>
-      <p>Yes — the web interface is mobile-responsive. You can upload clips, view your library, and publish from a mobile browser. However, for the best experience when uploading large video files, a desktop browser is recommended.</p>
-    </div>
-
-    <div class="faq-item">
-      <h3>How do I delete my account and data?</h3>
-      <p>Email us at <a href="mailto:hello@ariham.com">hello@ariham.com</a> with the subject "Delete My Account" and include the email address associated with your Google account. We will delete all your stored videos, settings, and tokens within 7 days and confirm via email.</p>
-    </div>
-
-    <div class="faq-item">
-      <h3>Why does Instagram publishing require a Facebook Page?</h3>
-      <p>This is a requirement from Meta's Instagram Graph API. The API only supports Instagram Professional accounts (Creator or Business), which must be linked to a Facebook Page. Personal Instagram accounts cannot publish via the API.</p>
-    </div>
-
-    <div class="faq-item">
-      <h3>My Instagram token expired. What do I do?</h3>
-      <p>Instagram access tokens expire after approximately 60 days. If publishing fails, go to <strong>Settings</strong>, disconnect Instagram, and reconnect it to get a fresh token.</p>
-    </div>
-
-    <div class="faq-item">
-      <h3>Can I publish to both Instagram and YouTube at the same time?</h3>
-      <p>Yes. In the Library, click the publish button on any reel and toggle on both Instagram and YouTube before clicking "Publish". ReelForge will upload to both platforms sequentially.</p>
-    </div>
-
-    <div class="faq-item">
-      <h3>What video formats are supported for upload?</h3>
-      <p>ReelForge accepts most common video formats (MP4, MOV, MKV, AVI, WebM). All clips are processed with FFmpeg and output as H.264 MP4 in 9:16 vertical format optimized for Instagram Reels and YouTube Shorts.</p>
-    </div>
-
-    <div class="faq-item">
-      <h3>Is my data shared with anyone?</h3>
-      <p>No. Your videos are processed on the ReelForge server and never sent to any third-party cloud service. OAuth tokens are stored securely per-user and used only when you initiate a publish action. See our <a href="/privacy.html">Privacy Policy</a> for full details.</p>
-    </div>
-
-    <h2>Still Need Help?</h2>
-    <p>If your question isn't answered above, reach out directly:</p>
-    <p><a href="mailto:hello@ariham.com" class="btn">Email Support →</a></p>
+    <a href="mailto:hello@ariham.com" class="btn-cta">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+      Send email
+    </a>
   </div>
 
-  <footer>
-    <p>
-      <a href="/">Home</a>
-      <a href="/privacy.html">Privacy Policy</a>
-      <a href="/terms.html">Terms of Service</a>
-      <a href="/support.html">Support</a>
-    </p>
-    <p style="margin-top: 1rem;">© 2025 ReelForge. All rights reserved.</p>
-  </footer>
+  <div class="section-label">Frequently asked questions</div>
+  <div class="faq-list">
+
+    <details open>
+      <summary>How do I connect my Instagram account?<span class="faq-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg></span></summary>
+      <div class="faq-body">Go to <strong>Settings</strong> in the app and click "Connect Instagram". You'll be redirected to Facebook to authorize ReelForge. Instagram publishing requires an <strong>Instagram Professional account</strong> (Creator or Business) linked to a Facebook Page. Personal Instagram accounts are not supported by the Instagram API.</div>
+    </details>
+
+    <details>
+      <summary>How do I connect my YouTube channel?<span class="faq-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg></span></summary>
+      <div class="faq-body">Go to <strong>Settings</strong> and click "Connect YouTube". You'll be asked to sign in with Google and grant permission to upload videos. ReelForge uses the same Google account you logged in with — no separate credentials needed.</div>
+    </details>
+
+    <details>
+      <summary>My video isn't playing in the Library. What do I do?<span class="faq-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg></span></summary>
+      <div class="faq-body">Make sure you're accessing ReelForge via HTTPS (e.g., <code>https://reeleditor.ariham.com</code>). Video playback requires HTTP Range request support, which is included in ReelForge's server. If using a reverse proxy, ensure it forwards <code>Range</code> headers.</div>
+    </details>
+
+    <details>
+      <summary>Can I use ReelForge on mobile?<span class="faq-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg></span></summary>
+      <div class="faq-body">Yes — the web interface is mobile-responsive. You can upload clips, view your library, and publish from a mobile browser. For the best experience when uploading large video files, a desktop browser is recommended.</div>
+    </details>
+
+    <details>
+      <summary>How do I delete my account and data?<span class="faq-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg></span></summary>
+      <div class="faq-body">Email us at <a href="mailto:hello@ariham.com">hello@ariham.com</a> with the subject "Delete My Account" and include the email address associated with your Google account. We will delete all your stored videos, settings, and tokens within 7 days and confirm via email.</div>
+    </details>
+
+    <details>
+      <summary>Why does Instagram publishing require a Facebook Page?<span class="faq-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg></span></summary>
+      <div class="faq-body">This is a requirement from Meta's Instagram Graph API. The API only supports Instagram Professional accounts (Creator or Business), which must be linked to a Facebook Page. Personal Instagram accounts cannot publish via the API.</div>
+    </details>
+
+    <details>
+      <summary>My Instagram token expired. What do I do?<span class="faq-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg></span></summary>
+      <div class="faq-body">Instagram access tokens expire after approximately 60 days. If publishing fails, go to <strong>Settings</strong>, disconnect Instagram, and reconnect it to get a fresh token.</div>
+    </details>
+
+    <details>
+      <summary>Can I publish to both Instagram and YouTube at once?<span class="faq-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg></span></summary>
+      <div class="faq-body">Yes. In the Library, click the publish button on any reel and toggle on both Instagram and YouTube before clicking "Publish". ReelForge will upload to both platforms sequentially.</div>
+    </details>
+
+    <details>
+      <summary>What video formats are supported for upload?<span class="faq-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg></span></summary>
+      <div class="faq-body">ReelForge accepts most common video formats (MP4, MOV, MKV, AVI, WebM). All clips are processed with FFmpeg and output as H.264 MP4 in 9:16 vertical format optimized for Instagram Reels and YouTube Shorts.</div>
+    </details>
+
+    <details>
+      <summary>Is my data shared with anyone?<span class="faq-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg></span></summary>
+      <div class="faq-body">No. Your videos are processed on the ReelForge server and never sent to any third-party cloud service. OAuth tokens are stored securely per-user and used only when you initiate a publish action. See our <a href="/privacy.html">Privacy Policy</a> for full details.</div>
+    </details>
+
+  </div>
+
+  <div class="help-box">
+    <h3>Still need help?</h3>
+    <p>If your question isn't answered above, reach out and we'll get back to you within 2–3 business days.</p>
+    <a href="mailto:hello@ariham.com" class="btn-cta">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+      hello@ariham.com
+    </a>
+  </div>
+</div>
+
+<footer>
+  <div class="footer-links">
+    <a href="/">Home</a>
+    <a href="/privacy.html">Privacy Policy</a>
+    <a href="/terms.html">Terms of Service</a>
+    <a href="/support.html">Support</a>
+  </div>
+  <div>© 2026 ReelForge — a product of <a href="https://ariham.com" target="_blank" rel="noopener">Ariham Technologies</a>.</div>
+</footer>
+
 </body>
 </html>

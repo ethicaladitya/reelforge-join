@@ -1251,7 +1251,7 @@ async def login_page(request: Request) -> HTMLResponse:
 async def google_login(request: Request) -> RedirectResponse:
     if not _google_configured():
         raise HTTPException(status_code=503, detail="Google OAuth not configured")
-    next_url = request.query_params.get("next", "/")
+    next_url = request.query_params.get("next", "/library")
     state = secrets.token_urlsafe(16) + "|" + next_url
     request.session["oauth_state"] = state
     redirect_uri = _app_base(request) + "/auth/google/callback"
@@ -1272,9 +1272,11 @@ async def google_login(request: Request) -> RedirectResponse:
 async def google_callback(request: Request) -> RedirectResponse:
     state = request.query_params.get("state", "")
     saved_state = request.session.pop("oauth_state", "")
-    next_url = "/"
+    next_url = "/library"
     if "|" in state:
         _, next_url = state.split("|", 1)
+        if next_url == "/":
+            next_url = "/library"
 
     code = request.query_params.get("code")
     if not code:
