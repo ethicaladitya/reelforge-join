@@ -194,12 +194,17 @@ USERS_DIR = BASE_DIR / "output" / "users"  # per-user data root
 # Google OAuth config — read from env or fall back to stored config
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+# Facebook/Instagram OAuth
+FACEBOOK_APP_ID = os.environ.get("FACEBOOK_APP_ID", "")
+FACEBOOK_APP_SECRET = os.environ.get("FACEBOOK_APP_SECRET", "")
 # PUBLIC_URL must be set when running behind a reverse proxy / tunnel
 # e.g. PUBLIC_URL=https://reel.adityashah.blog
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 _GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 _GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+_FB_AUTH_URL = "https://www.facebook.com/v19.0/dialog/oauth"
+_FB_TOKEN_URL = "https://graph.facebook.com/v19.0/oauth/access_token"
 
 
 def _app_base(request: Request) -> str:
@@ -1561,7 +1566,7 @@ async def delete_output(filename: str, request: Request) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Settings API
+# Settings API (OAuth-only — no manual token entry)
 # ---------------------------------------------------------------------------
 
 
@@ -1571,99 +1576,202 @@ async def get_settings(request: Request) -> dict[str, Any]:
     uid = user["sub"]
     s = _load_settings(uid)
     return {
-        "ig_user_id": s.get("ig_user_id", ""),
-        "ig_access_token": "***" if s.get("ig_access_token") else "",
-        "public_base_url": s.get("public_base_url", ""),
-        "yt_credentials_uploaded": user_yt_creds(uid).exists(),
-        "yt_authorized": user_yt_token(uid).exists(),
+        "ig_connected": bool(s.get("ig_access_token") and s.get("ig_user_id")),
+        "ig_username": s.get("ig_username", ""),
+        "yt_connected": user_yt_token(uid).exists(),
+        "yt_channel": _load_settings(uid).get("yt_channel", ""),
+        "ig_available": bool(FACEBOOK_APP_ID and FACEBOOK_APP_SECRET),
+        "yt_available": bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET),
     }
 
 
-@app.post("/api/settings")
-async def save_settings(request: Request) -> dict[str, str]:
-    user = _require_user(request)
-    uid = user["sub"]
-    body = await request.json()
-    s = _load_settings(uid)
-    if body.get("ig_user_id") is not None:
-        s["ig_user_id"] = body["ig_user_id"]
-    if body.get("ig_access_token") and body["ig_access_token"] != "***":
-        s["ig_access_token"] = body["ig_access_token"]
-    if body.get("public_base_url") is not None:
-        s["public_base_url"] = body["public_base_url"].rstrip("/")
-    _save_settings(uid, s)
-    return {"status": "saved"}
+# ---------------------------------------------------------------------------
+# YouTube OAuth (reuses server's GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)
+# ---------------------------------------------------------------------------
 
-
-@app.post("/api/settings/yt-credentials")
-async def upload_yt_credentials(request: Request, file: UploadFile = File(...)) -> dict[str, str]:
-    user = _require_user(request)
-    uid = user["sub"]
-    content = await file.read()
-    try:
-        parsed = json.loads(content)
-        if "installed" not in parsed and "web" not in parsed:
-            raise ValueError("Not a valid OAuth client_secret JSON")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    _ensure_user_dirs(uid)
-    user_yt_creds(uid).write_bytes(content)
-    if user_yt_token(uid).exists():
-        user_yt_token(uid).unlink()
-    return {"status": "uploaded"}
+_YT_SCOPES = ["https://www.googleapis.com/auth/youtube.upload",
+               "https://www.googleapis.com/auth/youtube.readonly"]
 
 
 @app.get("/api/auth/youtube")
 async def youtube_auth_start(request: Request) -> RedirectResponse:
     user = _require_user(request)
-    uid = user["sub"]
-    if not user_yt_creds(uid).exists():
-        raise HTTPException(status_code=400, detail="Upload YouTube credentials first")
-    from google_auth_oauthlib.flow import Flow
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=503, detail="YouTube OAuth not configured on server")
+    from urllib.parse import urlencode
     redirect_uri = _app_base(request) + "/api/auth/youtube/callback"
-    flow = Flow.from_client_secrets_file(
-        str(user_yt_creds(uid)),
-        scopes=["https://www.googleapis.com/auth/youtube.upload"],
-        redirect_uri=redirect_uri,
-    )
-    auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline",
-                                          state=uid)
-    return RedirectResponse(auth_url)
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": " ".join(_YT_SCOPES),
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": user["sub"],
+    }
+    return RedirectResponse(f"{_GOOGLE_AUTH_URL}?{urlencode(params)}")
 
 
 @app.get("/api/auth/youtube/callback")
 async def youtube_auth_callback(request: Request) -> HTMLResponse:
     uid = request.query_params.get("state", "")
-    creds_file = user_yt_creds(uid) if uid else None
-    if not creds_file or not creds_file.exists():
-        raise HTTPException(status_code=400, detail="Credentials missing")
-    from google_auth_oauthlib.flow import Flow
+    code = request.query_params.get("code", "")
+    if not uid or not code:
+        raise HTTPException(status_code=400, detail="Missing state or code")
     redirect_uri = _app_base(request) + "/api/auth/youtube/callback"
-    flow = Flow.from_client_secrets_file(
-        str(creds_file),
-        scopes=["https://www.googleapis.com/auth/youtube.upload"],
-        redirect_uri=redirect_uri,
-    )
-    flow.fetch_token(authorization_response=str(request.url))
-    creds = flow.credentials
+    async with httpx.AsyncClient() as client:
+        r = await client.post(_GOOGLE_TOKEN_URL, data={
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        })
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"Token exchange failed: {r.text}")
+        tokens = r.json()
+        # Fetch channel name
+        ch_r = await client.get(
+            "https://www.googleapis.com/youtube/v3/channels",
+            params={"part": "snippet", "mine": "true"},
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+        channel_name = ""
+        if ch_r.status_code == 200:
+            items = ch_r.json().get("items", [])
+            if items:
+                channel_name = items[0]["snippet"]["title"]
+
+    _ensure_user_dirs(uid)
     user_yt_token(uid).write_text(json.dumps({
-        "token": creds.token,
-        "refresh_token": creds.refresh_token,
-        "token_uri": creds.token_uri,
-        "client_id": creds.client_id,
-        "client_secret": creds.client_secret,
-        "scopes": list(creds.scopes or []),
+        "token": tokens["access_token"],
+        "refresh_token": tokens.get("refresh_token", ""),
+        "token_uri": _GOOGLE_TOKEN_URL,
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "scopes": _YT_SCOPES,
     }))
-    return HTMLResponse("<script>window.close();opener && opener.location.reload();</script>"
-                        "<p>YouTube authorized! You can close this tab.</p>")
+    s = _load_settings(uid)
+    s["yt_channel"] = channel_name
+    _save_settings(uid, s)
+    return HTMLResponse("<script>window.close();opener&&opener.location.reload();</script>"
+                        f"<p>YouTube connected ({channel_name}). You can close this tab.</p>")
 
 
 @app.delete("/api/auth/youtube")
 async def youtube_revoke(request: Request) -> dict[str, str]:
     user = _require_user(request)
-    t = user_yt_token(user["sub"])
+    uid = user["sub"]
+    t = user_yt_token(uid)
     if t.exists():
         t.unlink()
+    s = _load_settings(uid)
+    s.pop("yt_channel", None)
+    _save_settings(uid, s)
+    return {"status": "revoked"}
+
+
+# ---------------------------------------------------------------------------
+# Instagram OAuth (via Facebook Login)
+# ---------------------------------------------------------------------------
+
+_IG_SCOPES = "instagram_basic,instagram_content_publish,pages_read_engagement,pages_show_list"
+
+
+@app.get("/api/auth/instagram")
+async def instagram_auth_start(request: Request) -> RedirectResponse:
+    user = _require_user(request)
+    if not FACEBOOK_APP_ID or not FACEBOOK_APP_SECRET:
+        raise HTTPException(status_code=503, detail="Instagram OAuth not configured on server")
+    from urllib.parse import urlencode
+    redirect_uri = _app_base(request) + "/api/auth/instagram/callback"
+    params = {
+        "client_id": FACEBOOK_APP_ID,
+        "redirect_uri": redirect_uri,
+        "scope": _IG_SCOPES,
+        "response_type": "code",
+        "state": user["sub"],
+    }
+    return RedirectResponse(f"{_FB_AUTH_URL}?{urlencode(params)}")
+
+
+@app.get("/api/auth/instagram/callback")
+async def instagram_auth_callback(request: Request) -> HTMLResponse:
+    uid = request.query_params.get("state", "")
+    code = request.query_params.get("code", "")
+    if not uid or not code:
+        raise HTTPException(status_code=400, detail="Missing state or code")
+    redirect_uri = _app_base(request) + "/api/auth/instagram/callback"
+    base = "https://graph.facebook.com/v19.0"
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        # Exchange code for short-lived token
+        r = await client.get(f"{base}/oauth/access_token", params={
+            "client_id": FACEBOOK_APP_ID,
+            "client_secret": FACEBOOK_APP_SECRET,
+            "redirect_uri": redirect_uri,
+            "code": code,
+        })
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"FB token exchange failed: {r.text}")
+        short_token = r.json().get("access_token", "")
+
+        # Exchange for long-lived token (60 days)
+        ll = await client.get(f"{base}/oauth/access_token", params={
+            "grant_type": "fb_exchange_token",
+            "client_id": FACEBOOK_APP_ID,
+            "client_secret": FACEBOOK_APP_SECRET,
+            "fb_exchange_token": short_token,
+        })
+        long_token = ll.json().get("access_token", short_token) if ll.status_code == 200 else short_token
+
+        # Get connected Instagram Professional account
+        pages_r = await client.get(f"{base}/me/accounts", params={
+            "fields": "instagram_business_account,name",
+            "access_token": long_token,
+        })
+        ig_user_id = ""
+        ig_username = ""
+        if pages_r.status_code == 200:
+            for page in pages_r.json().get("data", []):
+                iba = page.get("instagram_business_account", {})
+                if iba.get("id"):
+                    ig_user_id = iba["id"]
+                    # Get username
+                    ig_r = await client.get(f"{base}/{ig_user_id}", params={
+                        "fields": "username",
+                        "access_token": long_token,
+                    })
+                    if ig_r.status_code == 200:
+                        ig_username = ig_r.json().get("username", ig_user_id)
+                    break
+
+        if not ig_user_id:
+            return HTMLResponse(
+                "<script>window.close();</script>"
+                "<p style='color:red'>No Instagram Professional account found linked to your Facebook pages. "
+                "Make sure your Instagram account is set to Creator or Business and linked to a Facebook Page.</p>"
+            )
+
+    _ensure_user_dirs(uid)
+    s = _load_settings(uid)
+    s["ig_access_token"] = long_token
+    s["ig_user_id"] = ig_user_id
+    s["ig_username"] = ig_username
+    _save_settings(uid, s)
+    return HTMLResponse("<script>window.close();opener&&opener.location.reload();</script>"
+                        f"<p>Instagram connected (@{ig_username}). You can close this tab.</p>")
+
+
+@app.delete("/api/auth/instagram")
+async def instagram_revoke(request: Request) -> dict[str, str]:
+    user = _require_user(request)
+    uid = user["sub"]
+    s = _load_settings(uid)
+    s.pop("ig_access_token", None)
+    s.pop("ig_user_id", None)
+    s.pop("ig_username", None)
+    _save_settings(uid, s)
     return {"status": "revoked"}
 
 
@@ -1683,12 +1791,10 @@ async def publish_instagram(request: Request) -> dict[str, Any]:
 
     ig_user_id = s.get("ig_user_id", "").strip()
     access_token = s.get("ig_access_token", "").strip()
-    public_base = s.get("public_base_url", "").strip()
+    public_base = PUBLIC_URL or _app_base(request)
 
     if not ig_user_id or not access_token:
-        raise HTTPException(status_code=400, detail="Instagram credentials not configured in Settings")
-    if not public_base:
-        raise HTTPException(status_code=400, detail="Public base URL not set in Settings (e.g. https://reel.adityashah.blog)")
+        raise HTTPException(status_code=400, detail="Connect Instagram in Settings first")
 
     if not filename.startswith("reel_") or not filename.endswith(".mp4"):
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -1807,6 +1913,12 @@ async def publish_youtube(request: Request) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request) -> HTMLResponse:
+    _require_user_page(request)
+    return HTMLResponse(SETTINGS_HTML)
+
+
 SETTINGS_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1815,64 +1927,44 @@ SETTINGS_HTML = r"""<!DOCTYPE html>
 <title>ReelForge — Settings</title>
 <style>
   :root {
-    --bg: #0f0f13; --surface: #1a1a23; --surface2: #23232f;
-    --accent: #FFD400; --text: #f0f0f5; --muted: #7a7a90;
-    --border: #2e2e3e; --success: #4ade80; --error: #f87171;
-    --radius: 12px;
+    --bg:#0f0f13; --surface:#1a1a23; --surface2:#23232f;
+    --accent:#FFD400; --text:#f0f0f5; --muted:#7a7a90;
+    --border:#2e2e3e; --success:#4ade80; --error:#f87171; --radius:12px;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-         background: var(--bg); color: var(--text); min-height: 100vh; }
-  header {
-    display: flex; align-items: center; gap: 12px;
-    padding: 18px 32px; border-bottom: 1px solid var(--border);
-    background: var(--surface);
-  }
-  header .logo { font-size: 22px; font-weight: 800; }
-  header .logo span { color: var(--accent); }
-  header nav { margin-left: auto; display: flex; gap: 8px; }
-  header nav a {
-    font-size: 13px; font-weight: 600; color: var(--muted);
-    text-decoration: none; padding: 6px 14px; border-radius: 8px;
-    border: 1px solid var(--border); transition: all 0.15s;
-  }
-  header nav a:hover, header nav a.active { color: var(--accent); border-color: var(--accent); }
-  .page { max-width: 680px; margin: 0 auto; padding: 40px 24px; }
-  h1 { font-size: 22px; font-weight: 800; margin-bottom: 6px; }
-  .page-sub { font-size: 14px; color: var(--muted); margin-bottom: 36px; }
-  .section {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 24px; margin-bottom: 20px;
-  }
-  .section-title {
-    font-size: 15px; font-weight: 700; margin-bottom: 4px;
-    display: flex; align-items: center; gap: 8px;
-  }
-  .section-sub { font-size: 13px; color: var(--muted); margin-bottom: 20px; }
-  label { display: block; font-size: 12px; font-weight: 600; color: var(--muted);
-          text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; margin-top: 14px; }
-  input[type=text], input[type=password] {
-    width: 100%; padding: 10px 14px; background: var(--surface2);
-    border: 1px solid var(--border); border-radius: 8px; color: var(--text);
-    font-size: 14px; outline: none; transition: border-color 0.15s;
-  }
-  input:focus { border-color: var(--accent); }
-  .btn { display: inline-flex; align-items: center; gap: 6px;
-         padding: 9px 18px; border-radius: 8px; border: 1px solid var(--border);
-         background: var(--surface2); color: var(--text); font-size: 13px;
-         font-weight: 600; cursor: pointer; transition: all 0.15s; }
-  .btn:hover { border-color: var(--accent); color: var(--accent); }
-  .btn-primary { background: var(--accent); color: #000; border-color: var(--accent); }
-  .btn-primary:hover { background: #ffe033; }
-  .btn-danger { color: var(--error); border-color: var(--error); background: none; }
-  .row { display: flex; gap: 10px; margin-top: 18px; align-items: center; flex-wrap: wrap; }
-  .tag { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
-         background: var(--success); color: #000; }
-  .tag.no { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
-  .msg { font-size: 13px; padding: 10px 14px; border-radius: 8px; margin-top: 14px; display: none; }
-  .msg.ok { background: rgba(74,222,128,0.15); color: var(--success); display: block; }
-  .msg.err { background: rgba(248,113,113,0.15); color: var(--error); display: block; }
-  input[type=file] { display: none; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+         background:var(--bg); color:var(--text); min-height:100vh; }
+  header { display:flex; align-items:center; gap:12px; padding:18px 32px;
+           border-bottom:1px solid var(--border); background:var(--surface); }
+  header .logo { font-size:22px; font-weight:800; }
+  header .logo span { color:var(--accent); }
+  header nav { margin-left:auto; display:flex; gap:8px; }
+  header nav a { font-size:13px; font-weight:600; color:var(--muted);
+    text-decoration:none; padding:6px 14px; border-radius:8px;
+    border:1px solid var(--border); transition:all 0.15s;
+    display:flex; align-items:center; gap:6px; }
+  header nav a:hover, header nav a.active { color:var(--accent); border-color:var(--accent); }
+  .page { max-width:680px; margin:0 auto; padding:40px 24px; }
+  h1 { font-size:22px; font-weight:800; margin-bottom:6px; }
+  .page-sub { font-size:14px; color:var(--muted); margin-bottom:36px; }
+  .section { background:var(--surface); border:1px solid var(--border);
+             border-radius:var(--radius); padding:24px; margin-bottom:20px; }
+  .section-title { font-size:16px; font-weight:700; margin-bottom:6px; display:flex; align-items:center; gap:8px; }
+  .section-sub { font-size:13px; color:var(--muted); margin-bottom:20px; line-height:1.5; }
+  .btn { display:inline-flex; align-items:center; gap:8px; padding:11px 20px;
+         border-radius:9px; border:1px solid var(--border); background:var(--surface2);
+         color:var(--text); font-size:14px; font-weight:600; cursor:pointer; transition:all 0.15s; }
+  .btn:hover { border-color:var(--accent); color:var(--accent); }
+  .btn-primary { background:var(--accent); color:#000; border-color:var(--accent); font-size:15px; padding:13px 24px; }
+  .btn-primary:hover { background:#ffe033; color:#000; }
+  .btn-danger { color:var(--error); border-color:var(--error); background:none; padding:8px 14px; font-size:13px; }
+  .connect-btn { width:100%; justify-content:center; }
+  .tag { display:inline-block; font-size:12px; font-weight:700; padding:4px 12px;
+         border-radius:999px; background:var(--success); color:#000; }
+  .connected-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .unavail { font-size:13px; color:var(--muted); padding:14px;
+             border:1px dashed var(--border); border-radius:8px; line-height:1.6; }
+  .unavail code { color:var(--accent); }
 </style>
 </head>
 <body>
@@ -1882,164 +1974,74 @@ SETTINGS_HTML = r"""<!DOCTYPE html>
     <a href="/">Render</a>
     <a href="/library">Library</a>
     <a href="/settings" class="active">Settings</a>
-    <a href="/auth/logout" id="nav-user" style="display:flex;align-items:center;gap:6px;">
+    <a href="/auth/logout" id="nav-user">
       <img id="nav-avatar" src="" width="22" height="22" style="border-radius:50%;display:none"/>
-      <span id="nav-name"></span> · Sign out
+      <span id="nav-name"></span> \xb7 Sign out
     </a>
   </nav>
 </header>
+
+<div class="page">
+  <h1>Settings</h1>
+  <div class="page-sub">Connect your social accounts — one click, no manual tokens.</div>
+
+  <div class="section">
+    <div class="section-title">📸 Instagram</div>
+    <div class="section-sub">Requires a Creator or Business account linked to a Facebook Page.</div>
+    <div id="ig-section">Loading…</div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">▶ YouTube</div>
+    <div class="section-sub">Uses the same Google account as your ReelForge login.</div>
+    <div id="yt-section">Loading…</div>
+  </div>
+</div>
+
 <script>
+async function connect(platform) {
+  const w = window.open(`/api/auth/${platform}`, '_blank', 'width=600,height=700');
+  const t = setInterval(() => { if (w.closed) { clearInterval(t); loadSettings(); } }, 500);
+}
+async function disconnect(platform) {
+  if (!confirm(`Disconnect ${platform === 'youtube' ? 'YouTube' : 'Instagram'}?`)) return;
+  await fetch(`/api/auth/${platform}`, { method: 'DELETE' });
+  loadSettings();
+}
+async function loadSettings() {
+  const r = await fetch('/api/settings');
+  const s = await r.json();
+  renderIG(s); renderYT(s);
+}
+function renderIG(s) {
+  const el = document.getElementById('ig-section');
+  if (!s.ig_available) {
+    el.innerHTML = '<div class="unavail">Instagram OAuth not configured.<br/><code>FACEBOOK_APP_ID</code> and <code>FACEBOOK_APP_SECRET</code> env vars needed on the server.</div>';
+    return;
+  }
+  el.innerHTML = s.ig_connected
+    ? `<div class="connected-row"><span class="tag">✓ @${s.ig_username}</span><button class="btn btn-danger" onclick="disconnect('instagram')">Disconnect</button></div>`
+    : '<button class="btn btn-primary connect-btn" onclick="connect(\'instagram\')"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg> Connect Instagram</button>';
+}
+function renderYT(s) {
+  const el = document.getElementById('yt-section');
+  if (!s.yt_available) {
+    el.innerHTML = '<div class="unavail">YouTube OAuth not configured.<br/><code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> env vars needed on the server.</div>';
+    return;
+  }
+  el.innerHTML = s.yt_connected
+    ? `<div class="connected-row"><span class="tag">✓ ${s.yt_channel || 'YouTube connected'}</span><button class="btn btn-danger" onclick="disconnect('youtube')">Disconnect</button></div>`
+    : '<button class="btn btn-primary connect-btn" onclick="connect(\'youtube\')"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M23.495 6.205a3.007 3.007 0 0 0-2.088-2.088c-1.87-.501-9.396-.501-9.396-.501s-7.507-.01-9.396.501A3.007 3.007 0 0 0 .527 6.205a31.247 31.247 0 0 0-.522 5.805 31.247 31.247 0 0 0 .522 5.783 3.007 3.007 0 0 0 2.088 2.088c1.868.502 9.396.502 9.396.502s7.506 0 9.396-.502a3.007 3.007 0 0 0 2.088-2.088 31.247 31.247 0 0 0 .5-5.783 31.247 31.247 0 0 0-.5-5.805zM9.609 15.601V8.408l6.264 3.602z"/></svg> Connect YouTube</button>';
+}
 fetch('/api/me').then(r=>r.json()).then(u=>{
   document.getElementById('nav-name').textContent = u.name.split(' ')[0];
   const img = document.getElementById('nav-avatar');
   if(u.picture){img.src=u.picture;img.style.display='';}
 }).catch(()=>{});
-</script>
-
-<div class="page">
-  <h1>Settings</h1>
-  <div class="page-sub">Configure social publishing credentials. Stored locally, never sent anywhere.</div>
-
-  <!-- General -->
-  <div class="section">
-    <div class="section-title">🌐 General</div>
-    <div class="section-sub">Required for Instagram to fetch your video.</div>
-    <label>Public base URL (e.g. https://reel.adityashah.blog)</label>
-    <input type="text" id="public_base_url" placeholder="https://reel.adityashah.blog"/>
-    <div class="row">
-      <button class="btn btn-primary" onclick="saveGeneral()">Save</button>
-      <span id="general-msg" class="msg"></span>
-    </div>
-  </div>
-
-  <!-- Instagram -->
-  <div class="section">
-    <div class="section-title">📸 Instagram</div>
-    <div class="section-sub">Requires a Professional account (Creator or Business). Get a long-lived access token from the Meta Graph API Explorer.</div>
-    <label>Instagram User ID</label>
-    <input type="text" id="ig_user_id" placeholder="17841400000000000"/>
-    <label>Long-lived Access Token</label>
-    <input type="password" id="ig_access_token" placeholder="EAAxxxxxxxx…"/>
-    <div class="row">
-      <button class="btn btn-primary" onclick="saveIG()">Save</button>
-      <span id="ig-status" class="tag no">Not configured</span>
-      <span id="ig-msg" class="msg"></span>
-    </div>
-  </div>
-
-  <!-- YouTube -->
-  <div class="section">
-    <div class="section-title">▶ YouTube</div>
-    <div class="section-sub">Create a project at console.cloud.google.com → APIs → YouTube Data API v3 → Credentials → OAuth 2.0 Client ID (Desktop app) → Download JSON.</div>
-    <label>OAuth Credentials JSON</label>
-    <div class="row" style="margin-top:0">
-      <button class="btn" onclick="document.getElementById('yt-file').click()">📁 Upload client_secret.json</button>
-      <input type="file" id="yt-file" accept=".json" onchange="uploadYTCreds(this)"/>
-      <span id="yt-creds-status" class="tag no">No file</span>
-    </div>
-    <div class="row">
-      <button class="btn btn-primary" id="yt-auth-btn" onclick="startYTAuth()" disabled>🔗 Connect Google Account</button>
-      <button class="btn btn-danger" id="yt-revoke-btn" onclick="revokeYT()" style="display:none">Disconnect</button>
-      <span id="yt-auth-status" class="tag no">Not authorized</span>
-    </div>
-    <span id="yt-msg" class="msg"></span>
-  </div>
-</div>
-
-<script>
-async function loadSettings() {
-  const r = await fetch('/api/settings');
-  const s = await r.json();
-  document.getElementById('public_base_url').value = s.public_base_url || '';
-  document.getElementById('ig_user_id').value = s.ig_user_id || '';
-  if (s.ig_access_token) {
-    document.getElementById('ig_access_token').placeholder = '(saved)';
-    document.getElementById('ig-status').textContent = '✓ Configured';
-    document.getElementById('ig-status').classList.remove('no');
-  }
-  if (s.yt_credentials_uploaded) {
-    document.getElementById('yt-creds-status').textContent = '✓ Uploaded';
-    document.getElementById('yt-creds-status').classList.remove('no');
-    document.getElementById('yt-auth-btn').disabled = false;
-  }
-  if (s.yt_authorized) {
-    document.getElementById('yt-auth-status').textContent = '✓ Connected';
-    document.getElementById('yt-auth-status').classList.remove('no');
-    document.getElementById('yt-revoke-btn').style.display = '';
-  }
-}
-
-async function saveGeneral() {
-  const el = document.getElementById('general-msg');
-  el.className = 'msg';
-  const r = await fetch('/api/settings', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ public_base_url: document.getElementById('public_base_url').value.trim() }),
-  });
-  el.textContent = r.ok ? '✓ Saved' : 'Save failed';
-  el.className = r.ok ? 'msg ok' : 'msg err';
-}
-
-async function saveIG() {
-  const el = document.getElementById('ig-msg');
-  el.className = 'msg';
-  const r = await fetch('/api/settings', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({
-      ig_user_id: document.getElementById('ig_user_id').value.trim(),
-      ig_access_token: document.getElementById('ig_access_token').value.trim(),
-    }),
-  });
-  el.textContent = r.ok ? '✓ Saved' : 'Save failed';
-  el.className = r.ok ? 'msg ok' : 'msg err';
-  if (r.ok) { document.getElementById('ig-status').textContent = '✓ Configured'; document.getElementById('ig-status').classList.remove('no'); }
-}
-
-async function uploadYTCreds(input) {
-  const el = document.getElementById('yt-msg');
-  el.className = 'msg';
-  const fd = new FormData();
-  fd.append('file', input.files[0]);
-  const r = await fetch('/api/settings/yt-credentials', { method: 'POST', body: fd });
-  if (r.ok) {
-    document.getElementById('yt-creds-status').textContent = '✓ Uploaded';
-    document.getElementById('yt-creds-status').classList.remove('no');
-    document.getElementById('yt-auth-btn').disabled = false;
-    document.getElementById('yt-auth-status').textContent = 'Not authorized';
-    document.getElementById('yt-auth-status').className = 'tag no';
-    document.getElementById('yt-revoke-btn').style.display = 'none';
-  } else {
-    const err = await r.json();
-    el.textContent = err.detail || 'Upload failed';
-    el.className = 'msg err';
-  }
-}
-
-function startYTAuth() {
-  const w = window.open('/api/auth/youtube', '_blank', 'width=600,height=700');
-  const t = setInterval(() => {
-    if (w.closed) { clearInterval(t); location.reload(); }
-  }, 500);
-}
-
-async function revokeYT() {
-  if (!confirm('Disconnect YouTube?')) return;
-  await fetch('/api/auth/youtube', { method: 'DELETE' });
-  location.reload();
-}
-
 loadSettings();
 </script>
 </body>
 </html>"""
-
-
-@app.get("/settings", response_class=HTMLResponse)
-async def settings_page(request: Request) -> HTMLResponse:
-    _require_user_page(request)
-    return HTMLResponse(SETTINGS_HTML)
 
 
 # ---------------------------------------------------------------------------
@@ -2049,7 +2051,6 @@ async def settings_page(request: Request) -> HTMLResponse:
 
 @app.get("/api/library")
 async def list_library(request: Request) -> list[dict[str, Any]]:
-    """Return metadata for every completed reel for the current user."""
     user = _require_user(request)
     uid = user["sub"]
     out_dir = user_outputs(uid)
@@ -2066,7 +2067,6 @@ async def list_library(request: Request) -> list[dict[str, Any]]:
                 if jid[:8] == short:
                     job_meta = job
                     break
-
         reels.append({
             "filename": p.name,
             "size_mb": round(stat.st_size / 1024 / 1024, 1),
