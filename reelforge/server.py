@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 import aiofiles
+import hashlib
+import hmac
 import os
 import secrets
 
@@ -1534,11 +1536,28 @@ async def serve_output(filename: str, request: Request) -> Response:
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Output not found")
 
+    # Use nginx X-Accel-Redirect for efficient static file serving.
+    # FastAPI handles auth; nginx serves the actual bytes (zero-copy, sendfile).
+    # Falls back to Python streaming if X-Accel is not available (local dev).
+    uid = user["sub"]
+    internal_path = f"/_internal_output/{uid}/reels/{filename}"
+
+    # Check if we're behind nginx (X-Accel-capable)
+    if request.headers.get("x-forwarded-for") or request.headers.get("x-forwarded-proto"):
+        return Response(
+            status_code=200,
+            headers={
+                "X-Accel-Redirect": internal_path,
+                "Content-Type": "video/mp4",
+                "Accept-Ranges": "bytes",
+            },
+        )
+
+    # Fallback for local dev (no nginx): serve directly via Python
     file_size = path.stat().st_size
     range_header = request.headers.get("range")
 
     if range_header:
-        # Parse "bytes=start-end"
         try:
             range_val = range_header.strip().replace("bytes=", "")
             start_str, _, end_str = range_val.partition("-")
@@ -1579,6 +1598,56 @@ async def serve_output(filename: str, request: Request) -> Response:
         path,
         media_type="video/mp4",
         headers={"Accept-Ranges": "bytes", "Content-Length": str(file_size)},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Temporary signed public URLs (for Instagram/external access)
+# ---------------------------------------------------------------------------
+
+_SHARE_TOKEN_EXPIRY = 600  # 10 minutes
+
+
+def _sign_share_token(uid: str, filename: str, expires: int) -> str:
+    """Create an HMAC-signed token for temporary public video access."""
+    msg = f"{uid}:{filename}:{expires}"
+    sig = hmac.new(_get_session_secret().encode(), msg.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{expires}.{sig}"
+
+
+def _verify_share_token(uid: str, filename: str, token: str) -> bool:
+    """Verify an HMAC-signed share token and check expiry."""
+    try:
+        parts = token.split(".", 1)
+        if len(parts) != 2:
+            return False
+        expires = int(parts[0])
+        if time.time() > expires:
+            return False
+        expected = _sign_share_token(uid, filename, expires)
+        return hmac.compare_digest(token, expected)
+    except (ValueError, TypeError):
+        return False
+
+
+@app.get("/api/output/public/{uid}/{filename}")
+async def serve_output_public(uid: str, filename: str, token: str = "") -> Response:
+    """Serve a video file without auth, validated by a signed token.
+    Used by Instagram/external services that need to download the video."""
+    if not token or not _verify_share_token(uid, filename, token):
+        raise HTTPException(status_code=403, detail="Invalid or expired share link")
+
+    if not filename.startswith("reel_") or not filename.endswith(".mp4"):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    path = user_outputs(uid) / filename
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Output not found")
+
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        headers={"Accept-Ranges": "bytes", "Content-Length": str(path.stat().st_size)},
     )
 
 
@@ -1906,7 +1975,10 @@ async def publish_instagram(request: Request) -> dict[str, Any]:
     if not (user_outputs(uid) / filename).exists():
         raise HTTPException(status_code=404, detail="File not found")
 
-    video_url = f"{public_base}/api/output/{filename}"
+    # Generate a signed temporary public URL so Instagram can download the video
+    expires = int(time.time()) + _SHARE_TOKEN_EXPIRY
+    token = _sign_share_token(uid, filename, expires)
+    video_url = f"{public_base}/api/output/public/{uid}/{filename}?token={token}"
     base = "https://graph.facebook.com/v21.0"
 
     async with httpx.AsyncClient(timeout=60) as client:

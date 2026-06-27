@@ -287,6 +287,15 @@ server {
         try_files \$uri =404;
     }
 
+    # Internal location for X-Accel-Redirect — nginx serves video bytes
+    # directly from disk (zero-copy sendfile) after FastAPI validates auth.
+    location /_internal_output/ {
+        internal;
+        alias $APP_DIR/output/users/;
+        add_header Content-Type video/mp4;
+        add_header Accept-Ranges bytes;
+    }
+
     # App routes — everything else proxies to FastAPI
     location / {
         proxy_pass http://127.0.0.1:$APP_PORT;
