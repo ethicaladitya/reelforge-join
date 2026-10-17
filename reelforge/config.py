@@ -26,6 +26,7 @@ class HighlightConfig(BaseModel):
     enabled: bool = True
     color: str = "#FFD400"
     keywords: list[str] = Field(default_factory=list)
+    numbers: bool = False  # also highlight any word containing a digit (₹5000, 20%, 2025)
 
 
 class CaptionConfig(BaseModel):
@@ -37,6 +38,22 @@ class CaptionConfig(BaseModel):
     max_chars_per_line: int = 22
     words_per_block: int = 4
     highlight: HighlightConfig = Field(default_factory=HighlightConfig)
+    bold: bool = True
+    uppercase: bool = False
+    shadow: int = 0              # drop-shadow depth in px (0 = none)
+    box: bool = False            # draw a translucent box behind each caption
+    box_color: str = "#000000"
+    box_opacity: float = 0.55
+    animation: str = "none"      # none | pop | fade
+    fonts_dir: str = "assets/fonts"  # drop .ttf/.otf files here to use them by family name
+
+    @field_validator("animation")
+    @classmethod
+    def validate_animation(cls, v: str) -> str:
+        allowed = {"none", "pop", "fade"}
+        if v not in allowed:
+            raise ValueError(f"captions.animation must be one of {allowed}")
+        return v
 
 
 class MusicConfig(BaseModel):
@@ -53,6 +70,21 @@ class ZoomConfig(BaseModel):
     scale: float = 1.05
     interval: float = 4.0
     duration: float = 2.0
+    punch_in: float = 1.0  # >1.0 zooms every other clip by this much, so each cut "punches in"
+
+
+class LookConfig(BaseModel):
+    grade: str = "none"    # none | warm | cream | punchy | cool | mono
+    vignette: bool = False
+    grain: int = 0         # film grain strength, 0–20
+
+    @field_validator("grade")
+    @classmethod
+    def validate_grade(cls, v: str) -> str:
+        allowed = {"none", "warm", "cream", "punchy", "cool", "mono"}
+        if v not in allowed:
+            raise ValueError(f"look.grade must be one of {allowed}")
+        return v
 
 
 class TransitionConfig(BaseModel):
@@ -102,12 +134,22 @@ class OutputConfig(BaseModel):
     pixel_format: str = "yuv420p"
     audio_codec: str = "aac"
     audio_bitrate: str = "192k"
+    fit: str = "crop"  # pad | crop | blur — how non-vertical clips fill the 9:16 frame
+
+    @field_validator("fit")
+    @classmethod
+    def validate_fit(cls, v: str) -> str:
+        allowed = {"pad", "crop", "blur"}
+        if v not in allowed:
+            raise ValueError(f"output.fit must be one of {allowed}")
+        return v
 
 
 class AudioConfig(BaseModel):
     loudness_target: float = -14.0
     true_peak: float = -1.0
     lra: float = 11.0
+    voice_cleanup: bool = False  # de-rumble, denoise, EQ, compress and de-ess the voice
 
 
 class EndCardConfig(BaseModel):
@@ -134,6 +176,8 @@ class ClipsConfig(BaseModel):
 
 
 class ReelForgeConfig(BaseModel):
+    style: str = "classic"
+    look: LookConfig = Field(default_factory=LookConfig)
     brand: BrandConfig = Field(default_factory=BrandConfig)
     captions: CaptionConfig = Field(default_factory=CaptionConfig)
     music: MusicConfig = Field(default_factory=MusicConfig)
@@ -152,9 +196,36 @@ class ReelForgeConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def load_config(path: Path | None = None) -> ReelForgeConfig:
-    """Load config from YAML file, falling back to defaults."""
+STYLES_PATH = Path(__file__).parent.parent / "config" / "styles.yaml"
+
+
+def load_styles() -> dict[str, dict[str, Any]]:
+    """Return the style presets from config/styles.yaml."""
+    with STYLES_PATH.open() as f:
+        return {k: v or {} for k, v in (yaml.safe_load(f) or {}).items()}
+
+
+def build_config(
+    base: dict[str, Any], overrides: dict[str, Any], style: str | None = None
+) -> ReelForgeConfig:
+    """Merge defaults < style preset < overrides and validate.
+
+    The style comes from the argument, else an override's ``style:`` key,
+    else the base's, else ``classic``.
+    """
+    name = style or overrides.get("style") or base.get("style") or "classic"
+    styles = load_styles()
+    if name not in styles:
+        raise ValueError(f"Unknown style {name!r}. Choose from: {', '.join(styles)}")
+    merged = _deep_merge(_deep_merge(base, styles[name]), overrides)
+    merged["style"] = name
+    return ReelForgeConfig.model_validate(merged)
+
+
+def load_config(path: Path | None = None, style: str | None = None) -> ReelForgeConfig:
+    """Load config from YAML file and optional style preset, falling back to defaults."""
     base: dict[str, Any] = {}
+    overrides: dict[str, Any] = {}
 
     default_path = Path(__file__).parent.parent / "config" / "default.yaml"
     if default_path.exists():
@@ -165,10 +236,9 @@ def load_config(path: Path | None = None) -> ReelForgeConfig:
         if not path.exists():
             raise FileNotFoundError(f"Config file not found: {path}")
         with path.open() as f:
-            overrides: dict[str, Any] = yaml.safe_load(f) or {}
-        base = _deep_merge(base, overrides)
+            overrides = yaml.safe_load(f) or {}
 
-    return ReelForgeConfig.model_validate(base)
+    return build_config(base, overrides, style)
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

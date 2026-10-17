@@ -10,7 +10,7 @@ from pathlib import Path
 
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
-from .audio_processor import audio_fade_filter, build_music_filter
+from .audio_processor import VOICE_CLEANUP_FILTER, audio_fade_filter, build_music_filter
 from .captions import build_caption_blocks, generate_ass
 from .clip_discovery import discover_clips
 from .config import ReelForgeConfig
@@ -18,10 +18,12 @@ from .end_card import render_end_card
 from .exceptions import RenderError
 from .ffmpeg_utils import loudnorm_filter, probe, run_ffmpeg, scale_pad_filter
 from .logger import StepLogger, console
+from .look import build_look_filter
 from .silence import compute_trim_points
 from .transcriber import Transcript, transcribe
 from .transitions import build_audio_crossfade, build_xfade_filter
 from .watermark import logo_filter_inputs, watermark_filter_inputs
+from .zoom import punch_in_filter
 
 log = logging.getLogger("reelforge")
 
@@ -165,7 +167,7 @@ class ReelPipeline:
         return metas
 
     def _normalize_clips(self, metas: list[ClipMeta], tmp: Path) -> list[ClipMeta]:
-        """Normalize audio loudness for each clip and apply tiny audio fades."""
+        """Normalize each clip: scale, punch-in, grade; clean and loudness-normalize audio."""
         result: list[ClipMeta] = []
         out_cfg = self.cfg.output
         audio_cfg = self.cfg.audio
@@ -187,15 +189,24 @@ class ReelPipeline:
                 norm_filter = loudnorm_filter(
                     audio_cfg.loudness_target, audio_cfg.true_peak, audio_cfg.lra
                 )
-                scale_filter = scale_pad_filter(out_cfg.width, out_cfg.height)
+                # ponytail: grain is added here, before captions, and survives two more
+                # CRF encodes. Move it to the last video pass if it looks smeared.
+                vf = ",".join(f for f in (
+                    scale_pad_filter(out_cfg.width, out_cfg.height, out_cfg.fit),
+                    punch_in_filter(i, self.cfg.zoom, out_cfg.width, out_cfg.height),
+                    build_look_filter(self.cfg.look),
+                ) if f)
+                af = f"{norm_filter},{fade_filter}"
+                if audio_cfg.voice_cleanup:
+                    af = f"{VOICE_CLEANUP_FILTER},{af}"
 
                 run_ffmpeg(
                     [
                         "-ss", str(meta.trim_start),
                         "-to", str(meta.trim_end),
                         "-i", str(meta.path),
-                        "-vf", scale_filter,
-                        "-af", f"{norm_filter},{fade_filter}",
+                        "-vf", vf,
+                        "-af", af,
                         "-r", str(out_cfg.fps),
                         "-c:v", out_cfg.codec,
                         "-crf", str(out_cfg.crf),
@@ -326,10 +337,15 @@ class ReelPipeline:
         out_cfg = self.cfg.output
         output = tmp / "captioned.mp4"
 
+        ass_vf = f"ass=filename='{ass_path}'"
+        fonts_dir = self.base_dir / self.cfg.captions.fonts_dir
+        if fonts_dir.is_dir():
+            ass_vf += f":fontsdir='{fonts_dir}'"
+
         run_ffmpeg(
             [
                 "-i", str(video),
-                "-vf", f"ass={ass_path}",
+                "-vf", ass_vf,
                 "-c:a", "copy",
                 "-c:v", out_cfg.codec,
                 "-crf", str(out_cfg.crf),

@@ -127,6 +127,8 @@ Options:
   -i, --input PATH    Directory containing input clips (overrides config).
   -o, --output PATH   Output video path (default: output/final_reel.mp4).
   -m, --music PATH    Optional background music file.
+  -s, --style NAME    classic | premium | editorial | kinetic | clean
+  --fit MODE          crop | blur | pad — how landscape clips fill 9:16
   -v, --verbose       Show verbose FFmpeg output.
   -V, --version       Show the version and exit.
   -h, --help          Show this message and exit.
@@ -149,7 +151,33 @@ reelforge --music music/lofi_beat.mp3
 
 # Verbose FFmpeg output for debugging
 reelforge --verbose
+
+# Pick a style
+reelforge render --style kinetic
 ```
+
+### Styles
+
+One flag changes the whole look. Presets live in `config/styles.yaml`; edit them or add your own.
+Anything in your own config (or the web UI) still overrides the preset.
+
+| Style | Feel | Captions | Picture | Cuts |
+|---|---|---|---|---|
+| `classic` | Your original look | Bold white, yellow keywords | As shot | Fade |
+| `premium` | Calm, old-money | Light Avenir, gold numbers, soft fade-in | Warm grade, vignette, grain | Slow dissolve |
+| `editorial` | Magazine | Georgia serif, cream | Cream film grade, vignette, grain | Dip to black |
+| `kinetic` | Loud, fast | Huge uppercase Impact, 2 words, pop-in | Punchy contrast, punch-in on every other clip | Hard cuts |
+| `clean` | Phone-native | Helvetica Neue on a dark translucent card | Cool neutral grade | Quick fade |
+
+All styles except `classic` also clean up the voice (rumble cut, light denoise, EQ, compression,
+de-ess; the 25 ms the chain adds is trimmed back so lip sync holds) and highlight any word with a
+digit in it. Captions are always kept out of the areas Instagram's UI covers.
+
+Landscape clips are centre-cropped to fill the vertical frame by default (`output.fit: crop`).
+Use `blur` to keep the whole frame over a blurred fill, or `pad` for black bars.
+
+To use a font that isn't installed, drop its `.ttf`/`.otf` into `assets/fonts/` and set
+`captions.font.family` to its family name.
 
 ---
 

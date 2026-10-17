@@ -18,11 +18,22 @@ log = logging.getLogger("reelforge")
 # ---------------------------------------------------------------------------
 
 
-def _hex_to_ass(color: str) -> str:
-    """Convert #RRGGBB to ASS &H00BBGGRR format."""
+def _hex_to_ass(color: str, opacity: float = 1.0) -> str:
+    """Convert #RRGGBB to ASS &HAABBGGRR format (AA: 00 = opaque, FF = invisible)."""
     color = color.lstrip("#")
     r, g, b = color[0:2], color[2:4], color[4:6]
-    return f"&H00{b}{g}{r}"
+    alpha = round((1.0 - opacity) * 255)
+    return f"&H{alpha:02X}{b}{g}{r}"
+
+
+# Instagram's UI covers the top ~7% and bottom ~20% of a reel.
+SAFE_TOP, SAFE_BOTTOM = 0.10, 0.80
+
+_ANIMATIONS = {
+    "none": "",
+    "pop": r"{\fscx70\fscy70\t(0,110,\fscx108\fscy108)\t(110,180,\fscx100\fscy100)}",
+    "fade": r"{\fad(120,0)}",
+}
 
 
 def _seconds_to_ass_time(secs: float) -> str:
@@ -81,8 +92,8 @@ YCbCr Matrix: TV.709
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_family},{font_size},{primary},{secondary},{outline},{back},1,0,0,0,100,100,0,0,1,{stroke_w},0,2,40,40,{margin_v},1
-Style: Highlight,{font_family},{font_size},{highlight},{secondary},{outline},{back},1,0,0,0,100,100,0,0,1,{stroke_w},0,2,40,40,{margin_v},1
+Style: Default,{font_family},{font_size},{primary},{secondary},{outline},{back},{bold},0,0,0,100,100,0,0,{border_style},{stroke_w},{shadow},2,60,60,{margin_v},1
+Style: Highlight,{font_family},{font_size},{highlight},{secondary},{outline},{back},{bold},0,0,0,100,100,0,0,{border_style},{stroke_w},{shadow},2,60,60,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -101,10 +112,22 @@ def generate_ass(
     primary = _hex_to_ass(font.color)
     highlight = _hex_to_ass(cfg.highlight.color)
     outline = _hex_to_ass(font.stroke_color)
-    back = "&H00000000"
+    back = "&H64000000"  # shadow colour: black at ~60%
     secondary = "&H00000000"
+    stroke_w = font.stroke_width
+    border_style = 1
+    if cfg.box:
+        # BorderStyle 3 = opaque box drawn in OutlineColour; Outline = padding.
+        border_style = 3
+        outline = _hex_to_ass(cfg.box_color, cfg.box_opacity)
+        stroke_w = max(stroke_w, 14)
 
-    margin_v = int(height * (1.0 - cfg.position))
+    position = min(max(cfg.position, SAFE_TOP), SAFE_BOTTOM)
+    if position != cfg.position:
+        log.warning(
+            "Caption position %.2f is under Instagram's UI; using %.2f", cfg.position, position
+        )
+    margin_v = int(height * (1.0 - position))
 
     header = _ASS_HEADER.format(
         width=width,
@@ -115,7 +138,10 @@ def generate_ass(
         secondary=secondary,
         outline=outline,
         back=back,
-        stroke_w=font.stroke_width,
+        stroke_w=stroke_w,
+        shadow=cfg.shadow,
+        bold=-1 if cfg.bold else 0,
+        border_style=border_style,
         highlight=highlight,
         margin_v=margin_v,
     )
@@ -129,14 +155,16 @@ def generate_ass(
         parts: list[str] = []
         for word in block.words:
             clean = re.sub(r"[^\w]", "", word.text).lower()
-            if cfg.highlight.enabled and clean in keywords:
+            shown = word.text.upper() if cfg.uppercase else word.text
+            is_number = cfg.highlight.numbers and any(c.isdigit() for c in word.text)
+            if cfg.highlight.enabled and (clean in keywords or is_number):
                 parts.append(
-                    f"{{\\c{highlight}}}{word.text}{{\\c{primary}}}"
+                    f"{{\\c{highlight}}}{shown}{{\\c{primary}}}"
                 )
             else:
-                parts.append(word.text)
+                parts.append(shown)
 
-        text = " ".join(parts)
+        text = _ANIMATIONS[cfg.animation] + " ".join(parts)
         t_start = _seconds_to_ass_time(block.start)
         t_end = _seconds_to_ass_time(block.end)
 

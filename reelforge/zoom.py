@@ -12,6 +12,18 @@ from __future__ import annotations
 from .config import ZoomConfig
 
 
+def punch_in_filter(clip_index: int, cfg: ZoomConfig, width: int, height: int) -> str:
+    """Centre-crop every other clip by ``cfg.punch_in`` so each cut feels like a punch-in.
+
+    Returns an empty string for clips that stay wide.
+    """
+    if cfg.punch_in <= 1.0 or clip_index % 2 == 0:
+        return ""
+    sw = int(width * cfg.punch_in) // 2 * 2  # even sizes for libx264
+    sh = int(height * cfg.punch_in) // 2 * 2
+    return f"scale={sw}:{sh}:flags=lanczos,crop={width}:{height}"
+
+
 def build_zoom_filter(duration: float, cfg: ZoomConfig, width: int, height: int) -> str:
     """Return an FFmpeg vf filter string for a subtle, fast Ken-Burns-style zoom.
 

@@ -201,8 +201,26 @@ def loudnorm_filter(target: float = -14.0, tp: float = -1.0, lra: float = 11.0) 
     return f"loudnorm=I={target}:TP={tp}:LRA={lra}:print_format=none"
 
 
-def scale_pad_filter(width: int, height: int) -> str:
-    """Scale video to fit within (width x height) with letterbox/pillarbox."""
+def scale_pad_filter(width: int, height: int, fit: str = "pad") -> str:
+    """Fit video into (width x height).
+
+    pad  — whole frame, black bars (letterbox/pillarbox)
+    crop — fill the frame, centre-crop the overflow (best for a centred speaker)
+    blur — whole frame over a blurred, zoomed copy of itself
+    """
+    if fit == "crop":
+        return (
+            f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
+            f"crop={width}:{height},setsar=1"
+        )
+    if fit == "blur":
+        return (
+            f"split[bg][fg];"
+            f"[bg]scale={width // 8}:{height // 8}:force_original_aspect_ratio=increase,"
+            f"crop={width // 8}:{height // 8},boxblur=6:2,scale={width}:{height}[bgb];"
+            f"[fg]scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos[fgs];"
+            f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1"
+        )
     return (
         f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"

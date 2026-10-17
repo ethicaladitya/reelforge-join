@@ -137,7 +137,7 @@ def _run_pipeline_thread(
     _rl.StepLogger.__enter__ = _patched_enter  # type: ignore[method-assign]
 
     try:
-        from .config import ReelForgeConfig, _deep_merge
+        from .config import build_config
         import yaml
 
         base_cfg_path = base_dir / "config" / "default.yaml"
@@ -146,8 +146,7 @@ def _run_pipeline_thread(
             with base_cfg_path.open() as f:
                 base_raw = yaml.safe_load(f) or {}
 
-        merged = _deep_merge(base_raw, config_overrides)
-        cfg = ReelForgeConfig.model_validate(merged)
+        cfg = build_config(base_raw, config_overrides)
 
         from .pipeline import ReelPipeline
 
@@ -658,6 +657,26 @@ fetch('/api/me').then(r=>r.json()).then(u=>{
       </div>
 
       <div class="setting-row">
+        <label>Style</label>
+        <select id="s-style">
+          <option value="classic" selected>Classic — bold captions, yellow keywords</option>
+          <option value="premium">Premium &amp; minimal — calm, warm, light type</option>
+          <option value="editorial">Magazine editorial — serif, cream film look</option>
+          <option value="kinetic">Bold &amp; kinetic — huge pop-in words, punch-ins</option>
+          <option value="clean">Phone-native clean — captions on a soft card</option>
+        </select>
+      </div>
+
+      <div class="setting-row">
+        <label>Landscape clips</label>
+        <select id="s-fit">
+          <option value="crop" selected>Crop to fill — speaker fills the screen</option>
+          <option value="blur">Blurred fill — keep the whole frame</option>
+          <option value="pad">Black bars</option>
+        </select>
+      </div>
+
+      <div class="setting-row">
         <label>Whisper Model</label>
         <select id="s-model">
           <option value="tiny">tiny — fastest, lower accuracy</option>
@@ -671,7 +690,8 @@ fetch('/api/me').then(r=>r.json()).then(u=>{
       <div class="setting-row">
         <label>Transition</label>
         <select id="s-transition">
-          <option value="fade" selected>Fade</option>
+          <option value="" selected>Style default</option>
+          <option value="fade">Fade</option>
           <option value="dissolve">Cross Dissolve</option>
           <option value="dip_to_black">Dip to Black</option>
           <option value="none">None</option>
@@ -1028,26 +1048,30 @@ async function uploadMusic() {
 function buildConfigOverrides() {
   const handle = document.getElementById('s-handle').value;
   const model = document.getElementById('s-model').value;
+  const style = document.getElementById('s-style').value;
   const transition = document.getElementById('s-transition').value;
   const captions = document.getElementById('s-captions').checked;
   const zoom = document.getElementById('s-zoom').checked;
   const watermark = document.getElementById('s-watermark').checked;
   const endcard = document.getElementById('s-endcard').checked;
-  const highlightColor = document.getElementById('s-highlight-color').value;
+  const hlInput = document.getElementById('s-highlight-color');
   const keywords = document.getElementById('s-keywords').value
     .split(',').map(k => k.trim()).filter(Boolean);
 
-  return {
+  // Only send colour/transition when the user picked one, so the style's own choice wins.
+  const highlight = { enabled: true, keywords };
+  if (hlInput.value !== hlInput.defaultValue) highlight.color = hlInput.value;
+
+  const overrides = {
+    style,
     brand: { handle, end_card: { enabled: endcard } },
-    captions: {
-      enabled: captions,
-      model,
-      highlight: { enabled: true, color: highlightColor, keywords }
-    },
+    captions: { enabled: captions, model, highlight },
     zoom: { enabled: zoom },
-    transitions: { type: transition },
-    watermark: { enabled: watermark }
+    watermark: { enabled: watermark },
+    output: { fit: document.getElementById('s-fit').value }
   };
+  if (transition) overrides.transitions = { type: transition };
+  return overrides;
 }
 
 // ─────────────────────────────────────────────

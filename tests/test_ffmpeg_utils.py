@@ -30,3 +30,9 @@ def test_scale_pad_filter_format() -> None:
     f = scale_pad_filter(1080, 1920)
     assert "scale=1080:1920" in f
     assert "pad=1080:1920" in f
+
+
+def test_scale_pad_filter_fit_modes() -> None:
+    assert "crop=1080:1920" in scale_pad_filter(1080, 1920, "crop")
+    assert "pad=" not in scale_pad_filter(1080, 1920, "crop")
+    assert "boxblur" in scale_pad_filter(1080, 1920, "blur")

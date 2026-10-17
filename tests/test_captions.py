@@ -84,3 +84,36 @@ def test_transcript_offset() -> None:
 
 
 import pytest
+
+
+def test_ass_styling_options(tmp_path: Path) -> None:
+    transcript = _make_transcript([("save", 0.0, 0.3), ("₹5000", 0.3, 0.8), ("now", 0.8, 1.0)])
+    cfg = CaptionConfig(
+        words_per_block=3, uppercase=True, box=True, box_opacity=0.5,
+        animation="pop", position=0.95,
+        highlight=HighlightConfig(enabled=True, color="#FFD400", numbers=True),
+    )
+    ass_path = tmp_path / "s.ass"
+    generate_ass(build_caption_blocks(transcript, cfg), cfg, ass_path, 1080, 1920)
+    content = ass_path.read_text()
+    dialogue = content.split("Dialogue:")[1]
+    assert "SAVE" in dialogue and "NOW" in dialogue
+    assert "\\c&H0000D4FF}₹5000" in dialogue      # number highlighted
+    assert dialogue.split(",", 9)[9].startswith("{\\fscx70")  # pop animation
+    style = content.split("Style: Default,")[1].split("\n")[0].split(",")
+    assert style[14] == "3"                         # BorderStyle box
+    assert style[4].startswith("&H80")              # box at 50% opacity
+    assert style[-2] == str(int(1920 * (1 - 0.80)))  # clamped out of Instagram UI
+
+
+def test_look_and_punch_in_filters() -> None:
+    from reelforge.config import LookConfig, ZoomConfig
+    from reelforge.look import build_look_filter
+    from reelforge.zoom import punch_in_filter
+    assert build_look_filter(LookConfig()) == ""
+    assert build_look_filter(LookConfig(grade="mono", vignette=True, grain=5)) == (
+        "hue=s=0,eq=contrast=1.08,vignette=PI/5,noise=alls=5"
+    )
+    z = ZoomConfig(punch_in=1.12)
+    assert punch_in_filter(0, z, 1080, 1920) == ""
+    assert punch_in_filter(1, z, 1080, 1920) == "scale=1208:2150:flags=lanczos,crop=1080:1920"

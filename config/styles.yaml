@@ -1,0 +1,69 @@
+# ReelForge style presets.
+#
+# Pick one with `reelforge render --style <name>`, `style: <name>` in your
+# config YAML, or the Style dropdown in the web UI.
+#
+# Each preset is a partial config layered on top of config/default.yaml.
+# Your own config (and UI settings) still win over the preset.
+#
+# Fonts are looked up by family name: system fonts, or any .ttf/.otf you
+# drop into assets/fonts/. The families below ship with macOS.
+
+# Your current look: bold white captions, yellow keywords, fade cuts.
+classic: {}
+
+# Premium & minimal: calm, warm, understated. Small light type, slow drift.
+premium:
+  captions:
+    font: { family: "Avenir Next", size: 58, color: "#F5F1EA", stroke_width: 0 }
+    bold: false
+    shadow: 2
+    words_per_block: 3
+    animation: fade
+    highlight: { color: "#C9A96E", numbers: true }
+  zoom: { scale: 1.03, interval: 6.0, duration: 3.0 }
+  transitions: { type: dissolve, duration: 0.4 }
+  look: { grade: warm, vignette: true, grain: 4 }
+  audio: { voice_cleanup: true }
+
+# Magazine editorial: serif type, cream film grade, dip-to-black section changes.
+editorial:
+  captions:
+    font: { family: "Georgia", size: 66, color: "#F3EDE2", stroke_width: 0 }
+    bold: false
+    shadow: 3
+    words_per_block: 3
+    animation: fade
+    highlight: { color: "#E8B04B", numbers: true }
+  zoom: { scale: 1.04, interval: 5.0, duration: 2.5 }
+  transitions: { type: dip_to_black, duration: 0.35 }
+  look: { grade: cream, vignette: true, grain: 7 }
+  audio: { voice_cleanup: true }
+
+# Bold & kinetic: huge uppercase words that pop, punch-in on every cut, hard cuts.
+kinetic:
+  captions:
+    font: { family: "Impact", size: 104, color: "#FFFFFF", stroke_color: "#000000", stroke_width: 6 }
+    uppercase: true
+    words_per_block: 2
+    animation: pop
+    highlight: { color: "#FFD400", numbers: true }
+  zoom: { scale: 1.06, interval: 3.0, duration: 1.5, punch_in: 1.08 }
+  transitions: { type: none }
+  look: { grade: punchy }
+  audio: { voice_cleanup: true }
+
+# Phone-native clean: tidy sans captions on a soft dark card, cool neutral grade.
+clean:
+  captions:
+    font: { family: "Helvetica Neue", size: 54, color: "#FFFFFF", stroke_width: 0 }
+    box: true
+    box_color: "#101014"
+    box_opacity: 0.55
+    words_per_block: 4
+    animation: fade
+    highlight: { color: "#4FD1FF", numbers: true }
+  zoom: { scale: 1.03, interval: 5.0, duration: 2.5 }
+  transitions: { type: fade, duration: 0.2 }
+  look: { grade: cool }
+  audio: { voice_cleanup: true }

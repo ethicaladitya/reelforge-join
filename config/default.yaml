@@ -90,6 +90,7 @@ output:
   pixel_format: "yuv420p"
   audio_codec: "aac"
   audio_bitrate: "192k"
+  fit: "crop"             # pad (black bars) | crop (fill, centre-crop) | blur (blurred fill)
 
 audio:
   loudness_target: -14.0  # LUFS (EBU R128 / streaming standard)

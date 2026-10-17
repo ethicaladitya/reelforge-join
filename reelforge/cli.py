@@ -17,7 +17,7 @@ except ImportError:
 from rich.panel import Panel
 
 from . import __version__
-from .config import load_config
+from .config import load_config, load_styles
 from .exceptions import ReelForgeError
 from .ffmpeg_utils import require_ffmpeg
 from .logger import console, get_logger
@@ -91,12 +91,18 @@ def ui_cmd(host: str, port: int, open_browser: bool) -> None:
               help="Output video path (default: output/final_reel.mp4).")
 @click.option("--music", "-m", type=click.Path(path_type=Path, exists=True), default=None,
               help="Optional background music file.")
+@click.option("--style", "-s", type=click.Choice(list(load_styles())), default=None,
+              help="Style preset from config/styles.yaml (default: classic).")
+@click.option("--fit", type=click.Choice(["pad", "crop", "blur"]), default=None,
+              help="How landscape clips fill the vertical frame: black bars, crop, or blurred fill.")
 @click.option("--verbose", "-v", is_flag=True, default=False, help="Show verbose FFmpeg output.")
 def render(
     config: Path | None,
     input_dir: Path | None,
     output: Path | None,
     music: Path | None,
+    style: str | None,
+    fit: str | None,
     verbose: bool,
 ) -> None:
     """Render a reel from the command line.
@@ -107,6 +113,7 @@ def render(
       reelforge render --config my.yaml
       reelforge render --input clips/ --output output/reel.mp4
       reelforge render --music music/song.mp3 --verbose
+      reelforge render --style kinetic --fit crop
     """
     log = get_logger("reelforge", verbose=verbose)
 
@@ -126,10 +133,13 @@ def render(
         sys.exit(1)
 
     try:
-        cfg = load_config(config)
+        cfg = load_config(config, style)
+        if fit:
+            cfg.output.fit = fit
     except Exception as exc:
         console.print(f"[bold red]Config error:[/bold red] {exc}")
         sys.exit(1)
+    console.print(f"[dim]Style:[/dim] [cyan]{cfg.style}[/cyan]")
 
     t0 = time.perf_counter()
     try:

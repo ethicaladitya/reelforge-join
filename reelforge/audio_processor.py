@@ -77,6 +77,20 @@ def build_music_filter(
     return music_chain + duck_chain + mix_chain
 
 
+VOICE_CLEANUP_FILTER = (
+    "highpass=f=80,"
+    "afftdn=nr=8:nf=-44:tn=1,"
+    "equalizer=f=260:t=q:w=1.0:g=-2.2,"
+    "equalizer=f=4200:t=q:w=1.2:g=2.2,"
+    "treble=g=1.5:f=9000,"
+    "acompressor=threshold=-22dB:ratio=3:attack=6:release=120:makeup=2.5,"
+    "deesser=i=0.35,"
+    # The chain (afftdn) delays audio by 25 ms; trim it back off to keep lip sync.
+    "atrim=start=0.025,asetpts=PTS-STARTPTS,apad=pad_dur=0.025"
+)
+"""Rumble cut, light denoise, mud cut, presence lift, air, gentle compression, de-ess."""
+
+
 def audio_fade_filter(duration: float, fade_ms: int = 80) -> str:
     """Return an FFmpeg audio filter adding tiny fades at clip boundaries."""
     fade_s = fade_ms / 1000.0

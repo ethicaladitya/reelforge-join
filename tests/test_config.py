@@ -59,3 +59,29 @@ def test_highlight_keywords_loaded() -> None:
     cfg = load_config()
     if cfg.captions.highlight.keywords:
         assert any(k.lower() == "wordpress" for k in [k.lower() for k in cfg.captions.highlight.keywords])
+
+
+def test_every_style_preset_validates() -> None:
+    from reelforge.config import load_styles
+    for name in load_styles():
+        assert load_config(style=name).style == name
+
+
+def test_style_sits_between_defaults_and_user_overrides() -> None:
+    from reelforge.config import build_config
+    base = {"transitions": {"type": "fade"}, "captions": {"words_per_block": 4}}
+    cfg = build_config(base, {"captions": {"words_per_block": 5}}, "kinetic")
+    assert cfg.transitions.type == "none"          # style beats defaults
+    assert cfg.captions.uppercase is True
+    assert cfg.captions.words_per_block == 5       # user beats style
+
+
+def test_style_can_come_from_overrides() -> None:
+    from reelforge.config import build_config
+    assert build_config({}, {"style": "editorial"}).look.grade == "cream"
+
+
+def test_unknown_style_raises() -> None:
+    from reelforge.config import build_config
+    with pytest.raises(ValueError, match="Unknown style"):
+        build_config({}, {}, "nope")
